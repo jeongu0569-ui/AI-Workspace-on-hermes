@@ -20,6 +20,8 @@ final class WorkspaceStore: ObservableObject {
     @Published var hermesModels: [HermesModelOption] = []
     @Published var hermesSessions: [HermesSessionSummary] = []
     @Published var selectedHermesModelId = ""
+    @Published var chatAccessMode: ChatAccessMode = .confirm
+    @Published var chatReasoningMode: ChatReasoningMode = .balanced
     @Published var chatContextScope: ChatContextScope = .currentFile
     @Published var statusMessage = "Not connected"
     @Published var isLoading = false
@@ -217,7 +219,12 @@ final class WorkspaceStore: ObservableObject {
                 }
             }
             let selectedModel = selectedHermesModel
-            let sessionId = try await liveClient.createSession(provider: selectedModel?.provider, model: selectedModel?.model)
+            let sessionId = try await liveClient.createSession(
+                provider: selectedModel?.provider,
+                model: selectedModel?.model,
+                reasoningEffort: chatReasoningMode.effort,
+                accessMode: chatAccessMode.rawValue
+            )
             liveSessionId = sessionId
             activeActivityLineId = nil
             isChatTurnOpen = false
@@ -297,6 +304,16 @@ final class WorkspaceStore: ObservableObject {
             try await api.deleteHermesSession(sessionId: session.id)
             hermesSessions.removeAll { $0.id == session.id }
             statusMessage = "Deleted \(session.title)"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func applyAccessModeToLiveSession() async {
+        guard let liveSessionId else { return }
+        do {
+            try await liveClient.setAccessMode(sessionId: liveSessionId, accessMode: chatAccessMode.rawValue)
+            statusMessage = "\(chatAccessMode.label) mode applied"
         } catch {
             statusMessage = error.localizedDescription
         }

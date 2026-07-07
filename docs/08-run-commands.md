@@ -126,10 +126,21 @@ http://127.0.0.1:8787
 
 그 다음 순서:
 
-1. 새로고침 버튼으로 Workspace Server 연결 확인
-2. Chat 탭에서 모델 선택
-3. 번개 아이콘으로 Hermes live session 연결
-4. 메시지 입력 후 전송
+1. Chat 탭에서 모델, 추론 모드, Safe/Full 권한 모드를 선택한다.
+2. 기존 세션이 필요하면 세션 드롭다운을 연다. 드롭다운을 열 때마다
+   Hermes 세션 목록이 다시 동기화된다.
+3. 새 대화를 시작하려면 `+` 버튼을 누른다. 이때는 로컬 채팅창만 비워지고,
+   실제 Hermes 세션은 첫 메시지를 보낼 때 생성된다.
+4. 메시지를 입력하고 전송 아이콘을 누른다.
+
+채팅 입력창 하단 컨트롤은 현재 다음 구조다.
+
+```text
++  History  Safe/Full  Model  Fast/Med/Deep  Send
+```
+
+`Safe`는 Hermes의 위험 작업 승인 게이트를 사용하는 모드이고, `Full`은
+Hermes가 지원하는 범위에서 추가 승인 없이 진행하는 모드다.
 
 ## 4. 백그라운드로 Workspace Server 실행
 
@@ -205,4 +216,3 @@ hermes serve --host 0.0.0.0 --port 9119
 하지만 Apple 앱이 붙는 대상은 Hermes가 아니라 Workspace Server다.
 따라서 모바일/원격 클라이언트 지원은 Workspace Server의 외부 바인딩까지 구현한 뒤
 테스트해야 한다.
-

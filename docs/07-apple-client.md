@@ -50,15 +50,23 @@ Implemented:
 - Hermes live chat connection through the Workspace Server
 - Hermes model picker backed by `GET /api/hermes/models`
 - Hermes session resume menu backed by `GET /api/hermes/sessions`
+- session menu syncs Hermes history whenever the menu is opened, so a separate
+  refresh button is no longer required
 - Hermes session history loading backed by `GET /api/hermes/sessions/:id/messages`
 - History sheet for session search, resume, and guarded delete
 - live session creation
 - message submit
+- Obsidian-plugin-style chat composer with `+`, History, Safe/Full access,
+  model picker, Fast/Med/Deep reasoning picker, and icon send button
 - chat context scope picker
 - `contextRequest` forwarding for current file, current folder, and workspace scopes
 - basic live event rendering for assistant, thinking, tool, approval, and system events
 - grouped, collapsible thinking/tool activity rows, one compact activity group per user turn
 - streaming thinking/reasoning deltas coalesced into smooth activity blocks instead of one row per token
+- active activity shimmer while Hermes is still streaming; finished rows show
+  `Done` and stop animating
+- Markdown rendering for assistant answers through Swift `AttributedString(markdown:)`
+  with a plain-text fallback
 - approval and denial buttons for `approval.request` events
 - normalized Hermes session menu titles instead of raw generated session ids
 - zero-message Hermes sessions are hidden from the client session list
@@ -124,6 +132,11 @@ The `+` button starts a local blank chat state only. Hermes session creation is
 deferred until the user sends the first message, which avoids empty orphan
 sessions in Hermes history.
 
+The session menu refreshes Hermes metadata immediately before opening, and the
+History sheet also refreshes on presentation. This mirrors the Obsidian plugin
+behavior: history is synchronized at the moment the user is about to choose or
+manage a session instead of requiring a separate reload button.
+
 The client now treats assistant text and activity as separate streams.
 `message.delta` appends to the assistant bubble. Thinking, reasoning, and tool
 events are grouped into a single collapsible activity row for the current user
@@ -134,11 +147,26 @@ answer.
 User messages are right-aligned and assistant messages remain left-aligned, so
 chat turns are visually easier to scan.
 
+Assistant answers are rendered as Markdown where SwiftUI supports it. This keeps
+headings, lists, code spans, and emphasis readable instead of showing the raw
+Markdown source as a flat paragraph.
+
 While an activity block is streaming, its collapsed state shows a three-line
 preview of the latest reasoning/tool text and a subtle shimmer. When streaming
 finishes, the shimmer stops and the collapsed row returns to the summary-only
 state. Saved Hermes reasoning is also restored as an activity row when loading
 session history.
+
+The chat composer follows the same compact control model used in the Obsidian
+Hermes plugin:
+
+```text
+  History  Safe/Full  Model  Fast/Med/Deep  Send
+```
+
+`Safe` maps to Hermes `yolo=false`, so dangerous actions still rely on Hermes'
+approval gate. `Full` maps to `yolo=true`, allowing Hermes to proceed without
+that extra approval step where Hermes supports it.
 
 ## Chat Context Scopes
 

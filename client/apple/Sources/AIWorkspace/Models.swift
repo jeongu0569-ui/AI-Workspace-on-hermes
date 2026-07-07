@@ -146,6 +146,44 @@ enum ApprovalState: String {
     case denied
 }
 
+enum ChatAccessMode: String, CaseIterable, Identifiable {
+    case confirm
+    case full
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .confirm: "Safe"
+        case .full: "Full"
+        }
+    }
+}
+
+enum ChatReasoningMode: String, CaseIterable, Identifiable {
+    case swift
+    case balanced
+    case deep
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .swift: "Fast"
+        case .balanced: "Med"
+        case .deep: "Deep"
+        }
+    }
+
+    var effort: String {
+        switch self {
+        case .swift: "low"
+        case .balanced: "medium"
+        case .deep: "high"
+        }
+    }
+}
+
 enum ChatContextScope: String, CaseIterable, Identifiable {
     case none = "none"
     case currentFile = "current-file"

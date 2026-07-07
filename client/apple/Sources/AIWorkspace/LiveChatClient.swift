@@ -64,6 +64,11 @@ struct ApprovalRespondParams: Encodable {
     let approved: Bool
 }
 
+struct AccessModeParams: Encodable {
+    let sessionId: String
+    let accessMode: String
+}
+
 struct ContextRequest: Encodable {
     let scopeType: String
     let scopePath: String?
@@ -98,10 +103,10 @@ actor LiveChatClient {
         _ = try await send(command: "connect", params: EmptyParams())
     }
 
-    func createSession(provider: String? = nil, model: String? = nil, accessMode: String = "confirm") async throws -> String {
+    func createSession(provider: String? = nil, model: String? = nil, reasoningEffort: String? = nil, accessMode: String = "confirm") async throws -> String {
         let response = try await send(
             command: "session.create",
-            params: CreateSessionParams(provider: provider, model: model, reasoningEffort: nil, accessMode: accessMode)
+            params: CreateSessionParams(provider: provider, model: model, reasoningEffort: reasoningEffort, accessMode: accessMode)
         )
         guard let sessionId = response.result?.sessionId else {
             throw LiveChatClientError.serverError("Hermes did not return a session id.")
@@ -127,6 +132,13 @@ actor LiveChatClient {
         _ = try await send(
             command: "approval.respond",
             params: ApprovalRespondParams(sessionId: sessionId, approved: approved)
+        )
+    }
+
+    func setAccessMode(sessionId: String, accessMode: String) async throws {
+        _ = try await send(
+            command: "config.accessMode",
+            params: AccessModeParams(sessionId: sessionId, accessMode: accessMode)
         )
     }
 

@@ -22,19 +22,6 @@ struct ChatHomeView: View {
             Divider()
             VStack(spacing: 10) {
                 HStack(spacing: 10) {
-                    Picker("Model", selection: $store.selectedHermesModelId) {
-                        if store.hermesModels.isEmpty {
-                            Text("Default Hermes model").tag("")
-                        } else {
-                            ForEach(store.hermesModels) { model in
-                                Text(model.label).tag(model.id)
-                            }
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: 260)
-                    .help("Model for the next new Hermes live session")
-
                     Menu {
                         if store.hermesSessions.isEmpty {
                             Text("No sessions loaded")
@@ -56,14 +43,9 @@ struct ChatHomeView: View {
                         Label("Sessions", systemImage: "clock.arrow.circlepath")
                     }
                     .menuStyle(.borderlessButton)
-
-                    Button {
+                    .simultaneousGesture(TapGesture().onEnded {
                         Task { await store.refreshHermesMetadata() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Refresh Hermes models and sessions")
+                    })
 
                     Spacer()
                 }
@@ -87,38 +69,77 @@ struct ChatHomeView: View {
                     Spacer()
                 }
 
-                HStack(spacing: 12) {
-                    Button {
-                        store.prepareNewChat()
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("New chat")
-
-                    Button {
-                        showingSessionManager = true
-                    } label: {
-                        Image(systemName: "clock.arrow.circlepath")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Search and manage sessions")
-
+                VStack(spacing: 8) {
                     TextField("Message Hermes...", text: $draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...4)
-                        .padding(10)
-                        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
                         .onSubmit(sendDraft)
-                    Button {
-                        sendDraft()
-                    } label: {
-                        Image(systemName: "paperplane.fill")
+
+                    HStack(spacing: 12) {
+                        Button {
+                            store.prepareNewChat()
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("New chat")
+
+                        Button {
+                            showingSessionManager = true
+                        } label: {
+                            Image(systemName: "clock.arrow.circlepath")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Search and manage sessions")
+
+                        Picker("Access", selection: $store.chatAccessMode) {
+                            ForEach(ChatAccessMode.allCases) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(maxWidth: 84)
+                        .onChange(of: store.chatAccessMode) {
+                            Task { await store.applyAccessModeToLiveSession() }
+                        }
+
+                        Picker("Model", selection: $store.selectedHermesModelId) {
+                            if store.hermesModels.isEmpty {
+                                Text("Default").tag("")
+                            } else {
+                                ForEach(store.hermesModels) { model in
+                                    Text(model.label).tag(model.id)
+                                }
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(maxWidth: 220)
+
+                        Picker("Reasoning", selection: $store.chatReasoningMode) {
+                            ForEach(ChatReasoningMode.allCases) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(maxWidth: 82)
+
+                        Spacer()
+
+                        Button {
+                            sendDraft()
+                        } label: {
+                            Image(systemName: "paperplane.fill")
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.title3)
+                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .buttonStyle(.borderless)
-                    .font(.title3)
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                .padding(10)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
             }
             .padding(16)
         }
@@ -209,6 +230,9 @@ struct SessionManagerView: View {
         }
         .padding(20)
         .frame(idealWidth: 520, idealHeight: 460)
+        .task {
+            await store.refreshHermesMetadata()
+        }
         .confirmationDialog(
             "Delete this Hermes session?",
             isPresented: Binding(
@@ -249,6 +273,9 @@ struct MessageBubble: View {
                     .foregroundStyle(.secondary)
                 if line.role == "activity" {
                     activityView
+                } else if line.role == "assistant" {
+                    MarkdownText(markdown: line.text)
+                        .textSelection(.enabled)
                 } else {
                     Text(line.text)
                         .textSelection(.enabled)
@@ -326,6 +353,12 @@ struct MessageBubble: View {
                     Text(line.text)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    Text(line.isStreamingActivity ? "Running" : "Done")
+                        .font(.caption2)
+                        .foregroundStyle(line.isStreamingActivity ? .primary : .secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary.opacity(0.4), in: Capsule())
                     Spacer()
                 }
                 .shimmering(active: line.isStreamingActivity)
@@ -376,29 +409,31 @@ struct MessageBubble: View {
     }
 }
 
+private struct MarkdownText: View {
+    let markdown: String
+
+    var body: some View {
+        Text(attributed)
+    }
+
+    private var attributed: AttributedString {
+        (try? AttributedString(markdown: markdown))
+            ?? AttributedString(markdown)
+    }
+}
+
 private struct ShimmerModifier: ViewModifier {
     let active: Bool
-    @State private var phase = -0.8
+    @State private var phase = false
 
     func body(content: Content) -> some View {
         if active {
             content
-                .overlay {
-                    GeometryReader { proxy in
-                        LinearGradient(
-                            colors: [.clear, .white.opacity(0.28), .clear],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                        .frame(width: max(80, proxy.size.width * 0.45))
-                        .offset(x: proxy.size.width * phase)
-                        .blendMode(.plusLighter)
-                    }
-                    .mask(content)
-                }
+                .opacity(phase ? 1 : 0.62)
+                .shadow(color: .white.opacity(phase ? 0.35 : 0.05), radius: phase ? 8 : 1)
                 .onAppear {
-                    withAnimation(.linear(duration: 1.25).repeatForever(autoreverses: false)) {
-                        phase = 1.4
+                    withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                        phase = true
                     }
                 }
         } else {
