@@ -17,6 +17,8 @@ export async function buildWorkspaceContext(workspaceRoot, request = {}) {
       activePath: cleanOptionalPath(workspaceRoot, request.activePath),
       ragRecommended: false,
       ragSearchProvider: "docsearch-mcp",
+      fallbackSearchProvider: "workspace-scan",
+      searchEndpoint: "/api/search",
       generatedAt: new Date().toISOString()
     },
     inlineBlocks: [],
@@ -282,4 +284,3 @@ function clampNumber(value, min, max, fallback) {
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, number));
 }
-

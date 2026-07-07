@@ -42,6 +42,7 @@ This repository currently contains the first server-side scaffold:
 - basic Hermes model/session proxy endpoints
 - live Hermes WebSocket bridge at `WS /api/live`
 - workspace context router for note/folder/PDF/workspace scopes
+- fallback workspace text search API
 - architecture, API, data model, and roadmap docs
 
 The UI app will be added after the server API stabilizes.
@@ -85,6 +86,8 @@ POST /api/folder
 PATCH /api/file/move
 DELETE /api/file?path=Notes/example.md
 POST /api/context
+GET  /api/search/status
+POST /api/search
 
 GET  /api/hermes/models
 GET  /api/hermes/sessions

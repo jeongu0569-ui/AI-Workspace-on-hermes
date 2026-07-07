@@ -13,7 +13,8 @@ Workspace Server
         ├── Search/index state
         ├── Hermes API proxy
         ├── Hermes live event bridge
-        └── Workspace context router
+        ├── Workspace context router
+        └── Search API
         │
         ▼
 Hermes Server
@@ -148,11 +149,17 @@ Implemented server API:
 
 ```text
 POST /api/context
+POST /api/search
+GET  /api/search/status
 ```
 
 The same context request shape can be sent inside live `prompt.submit` as
 `contextRequest`, so clients do not need to duplicate folder/PDF/RAG routing
 logic.
+
+The first search implementation is `workspace-scan`, a dependency-free text scan
+fallback. It is intentionally simple. The API boundary exists so `docsearch-mcp`
+or a vector index can replace the internals without changing the client.
 
 ## Code Area
 

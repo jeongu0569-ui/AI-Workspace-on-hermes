@@ -17,6 +17,7 @@ import {
   encodeWebSocketFrame
 } from "./lib/hermes-live.mjs";
 import { buildWorkspaceContext } from "./lib/context-router.mjs";
+import { searchStatus, searchWorkspace } from "./lib/search-service.mjs";
 
 const DEFAULT_PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const DEFAULT_WORKSPACE_ROOT = path.join(process.env.HOME || process.cwd(), "HermesWorkspace");
@@ -194,6 +195,12 @@ async function handleRequest(req, res) {
     if (req.method === "POST" && url.pathname === "/api/context") {
       return sendJson(res, await resolveContext(req));
     }
+    if (req.method === "GET" && url.pathname === "/api/search/status") {
+      return sendJson(res, searchStatus(WORKSPACE_ROOT));
+    }
+    if (req.method === "POST" && url.pathname === "/api/search") {
+      return sendJson(res, await runSearch(req));
+    }
     if (url.pathname.startsWith("/api/hermes/")) {
       return handleHermesProxy(req, res, url);
     }
@@ -216,7 +223,8 @@ async function workspaceInfo() {
     hermes: {
       serverUrl: HERMES_SERVER_URL,
       dashboardLoginConfigured: Boolean(HERMES_DASHBOARD_USERNAME && HERMES_DASHBOARD_PASSWORD)
-    }
+    },
+    search: searchStatus(WORKSPACE_ROOT)
   };
 }
 
@@ -325,6 +333,11 @@ async function deletePath(url) {
 async function resolveContext(req) {
   const body = await readJsonBody(req);
   return await buildWorkspaceContext(WORKSPACE_ROOT, body);
+}
+
+async function runSearch(req) {
+  const body = await readJsonBody(req);
+  return await searchWorkspace(WORKSPACE_ROOT, body);
 }
 
 async function handleHermesProxy(req, res, url) {

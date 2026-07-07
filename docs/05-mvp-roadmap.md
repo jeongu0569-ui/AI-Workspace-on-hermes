@@ -100,12 +100,23 @@ Remaining:
 
 ## Phase 5: docsearch Integration
 
-Status: planned.
+Status: in progress.
+
+Implemented:
+
+- `GET /api/search/status`
+- `POST /api/search`
+- dependency-free `workspace-scan` fallback for markdown/text/code files
+- search status included in `/api/workspace`
+- context router includes `searchEndpoint` and fallback provider metadata
+
+Remaining:
 
 - Watch workspace root.
 - Index markdown, PDF, and selected text/code file types.
-- Store index status.
-- Send search hints to Hermes.
+- Store persistent index status.
+- Connect `docsearch-mcp` or a vector index behind the same API.
+- Return PDF page/chunk references.
 
 ## Phase 6: Code Workspace
 

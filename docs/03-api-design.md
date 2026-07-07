@@ -153,6 +153,58 @@ Policy:
 - `folder`, `pdf`, `tag`, `linked`, and `workspace` recommend RAG/docsearch.
 - All paths must be workspace-relative.
 
+## Search
+
+### `GET /api/search/status`
+
+Returns the active search provider and indexing capability.
+
+Current MVP provider:
+
+```text
+workspace-scan
+```
+
+This is a dependency-free fallback that scans text files in the workspace. It is
+not a vector index and does not replace docsearch-mcp. It gives the client and
+server a stable search API while the proper indexer is added.
+
+### `POST /api/search`
+
+Searches within a workspace-relative scope.
+
+```json
+{
+  "query": "scheduler",
+  "scopePath": "Notes/Operating Systems",
+  "maxResults": 10
+}
+```
+
+Response:
+
+```json
+{
+  "provider": "workspace-scan",
+  "query": "scheduler",
+  "scopePath": "Notes/Operating Systems",
+  "resultCount": 1,
+  "results": [
+    {
+      "path": "Notes/Operating Systems/os.md",
+      "kind": "markdown",
+      "snippet": "... scheduler chooses a process ..."
+    }
+  ]
+}
+```
+
+Future provider:
+
+```text
+docsearch-mcp / vector index
+```
+
 ## Hermes Proxy
 
 ### `GET /api/hermes/models`
