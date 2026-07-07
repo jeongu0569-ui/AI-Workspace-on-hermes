@@ -9,6 +9,7 @@ final class WorkspaceStore: ObservableObject {
     @Published var notesPath = ""
     @Published var codePath = ""
     @Published var selectedFile: FileResponse?
+    @Published var selectedRawFile: RawFilePreview?
     @Published var editorText = ""
     @Published var isEditingFile = false
     @Published var searchResponse: SearchResponse?
@@ -85,8 +86,21 @@ final class WorkspaceStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            selectedFile = try await api.file(path: item.path)
-            editorText = selectedFile?.content ?? ""
+            if item.kind == "pdf" {
+                let url = try await api.downloadRawFile(path: item.path, name: item.name)
+                selectedRawFile = RawFilePreview(path: item.path, name: item.name, kind: item.kind, url: url)
+                selectedFile = nil
+                editorText = ""
+            } else if item.kind == "image" {
+                let url = try api.rawURL(path: item.path)
+                selectedRawFile = RawFilePreview(path: item.path, name: item.name, kind: item.kind, url: url)
+                selectedFile = nil
+                editorText = ""
+            } else {
+                selectedFile = try await api.file(path: item.path)
+                selectedRawFile = nil
+                editorText = selectedFile?.content ?? ""
+            }
             isEditingFile = false
             statusMessage = "Opened \(item.name)"
         } catch {
@@ -222,7 +236,7 @@ final class WorkspaceStore: ObservableObject {
         case .none:
             "No workspace context"
         case .currentFile:
-            selectedFile.map { "Current file: \($0.path)" } ?? "Current file: none selected"
+            selectedResourcePath.map { "Current file: \($0)" } ?? "Current file: none selected"
         case .currentFolder:
             "Current folder: \(selectedFolderPath.isEmpty ? "workspace root" : selectedFolderPath)"
         case .workspace:
@@ -282,20 +296,28 @@ final class WorkspaceStore: ObservableObject {
         case .none:
             return nil
         case .currentFile:
-            guard let selectedFile else { return nil }
-            let scopeType = selectedFile.kind == "pdf" ? "pdf" : "current"
-            return ContextRequest(scopeType: scopeType, scopePath: selectedFile.path, activePath: selectedFile.path)
+            guard let selectedResourcePath, let selectedResourceKind else { return nil }
+            let scopeType = selectedResourceKind == "pdf" ? "pdf" : "current"
+            return ContextRequest(scopeType: scopeType, scopePath: selectedResourcePath, activePath: selectedResourcePath)
         case .currentFolder:
-            return ContextRequest(scopeType: "folder", scopePath: selectedFolderPath, activePath: selectedFile?.path)
+            return ContextRequest(scopeType: "folder", scopePath: selectedFolderPath, activePath: selectedResourcePath)
         case .workspace:
-            return ContextRequest(scopeType: "workspace", scopePath: nil, activePath: selectedFile?.path)
+            return ContextRequest(scopeType: "workspace", scopePath: nil, activePath: selectedResourcePath)
         }
     }
 
     private var selectedFolderPath: String {
-        guard let path = selectedFile?.path else { return "" }
+        guard let path = selectedResourcePath else { return "" }
         guard let slashIndex = path.lastIndex(of: "/") else { return "" }
         return String(path[..<slashIndex])
+    }
+
+    private var selectedResourcePath: String? {
+        selectedFile?.path ?? selectedRawFile?.path
+    }
+
+    private var selectedResourceKind: String? {
+        selectedFile?.kind ?? selectedRawFile?.kind
     }
 
     private func nestedPath(root: String, workspacePath: String) -> String {

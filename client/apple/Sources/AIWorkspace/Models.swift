@@ -52,6 +52,14 @@ struct FileResponse: Codable {
     var content: String
 }
 
+struct RawFilePreview: Identifiable {
+    var id: String { path }
+    let path: String
+    let name: String
+    let kind: String
+    let url: URL
+}
+
 struct SearchResponse: Codable {
     struct Result: Codable, Identifiable {
         var id: String { path }

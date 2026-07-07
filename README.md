@@ -130,6 +130,7 @@ Current client shell:
 - recursive Notes and Code folder navigation
 - text/markdown file preview
 - markdown/text/code editing and save through `PUT /api/file`
+- PDF and image preview through `GET /api/raw`
 - search form backed by `POST /api/search`
 - Chat view backed by `WS /api/live`
 - live Hermes session creation and message submit

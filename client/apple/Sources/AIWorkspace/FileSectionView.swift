@@ -1,4 +1,5 @@
 import SwiftUI
+import PDFKit
 
 struct FileSectionView: View {
     @EnvironmentObject private var store: WorkspaceStore
@@ -93,7 +94,32 @@ struct FilePreviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let file = store.selectedFile {
+            if let rawFile = store.selectedRawFile {
+                HeaderView(title: rawFile.name, subtitle: rawFile.path)
+                if rawFile.kind == "pdf" {
+                    PDFPreviewView(url: rawFile.url)
+                } else if rawFile.kind == "image" {
+                    AsyncImage(url: rawFile.url) { phase in
+                        switch phase {
+                        case let .success(image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                                .padding(20)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        case let .failure(error):
+                            ContentUnavailableView("Could not load image", systemImage: "photo", description: Text(error.localizedDescription))
+                        case .empty:
+                            ProgressView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                } else {
+                    ContentUnavailableView("Raw preview unavailable", systemImage: "doc", description: Text(rawFile.path))
+                }
+            } else if let file = store.selectedFile {
                 HeaderView(title: file.name, subtitle: file.path)
                 HStack(spacing: 12) {
                     if store.isEditingFile {
@@ -150,5 +176,22 @@ struct FilePreviewView: View {
                 ContentUnavailableView("Select a file", systemImage: "doc.text.magnifyingglass", description: Text("Open a markdown or text file from the tree."))
             }
         }
+    }
+}
+
+struct PDFPreviewView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.displayDirection = .vertical
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateNSView(_ view: PDFView, context: Context) {
+        view.document = PDFDocument(url: url)
     }
 }

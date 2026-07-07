@@ -37,6 +37,31 @@ struct WorkspaceAPI {
         return try await request(components)
     }
 
+    func rawURL(path: String) throws -> URL {
+        var components = try components("/api/raw")
+        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        guard let url = components.url else { throw WorkspaceAPIError.invalidURL }
+        return url
+    }
+
+    func downloadRawFile(path: String, name: String) async throws -> URL {
+        let url = try rawURL(path: path)
+        var request = URLRequest(url: url)
+        request.setValue("*/*", forHTTPHeaderField: "accept")
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else {
+            throw WorkspaceAPIError.badStatus(status, String(data: data, encoding: .utf8) ?? "")
+        }
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AIWorkspaceRawPreviews", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let fileURL = temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + "-" + name)
+        try data.write(to: fileURL, options: .atomic)
+        return fileURL
+    }
+
     func writeFile(path: String, content: String) async throws {
         var components = try components("/api/file")
         components.queryItems = [URLQueryItem(name: "path", value: path)]
@@ -102,4 +127,3 @@ struct AnyEncodable: Encodable {
         try encodeBody(encoder)
     }
 }
-
