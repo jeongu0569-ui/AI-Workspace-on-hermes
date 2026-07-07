@@ -347,6 +347,13 @@ async function handleHermesProxy(req, res, url) {
   if (url.pathname === "/api/hermes/sessions" && req.method === "GET") {
     return sendJson(res, normalizeHermesSessionsResponse(await hermesJson("/api/sessions?limit=200")));
   }
+  const messagesMatch = url.pathname.match(/^\/api\/hermes\/sessions\/([^/]+)\/messages$/);
+  if (messagesMatch && req.method === "GET") {
+    const sessionId = decodeURIComponent(messagesMatch[1]);
+    return sendJson(res, normalizeHermesSessionMessagesResponse(
+      await hermesJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`)
+    ));
+  }
   if (url.pathname === "/api/hermes/sessions" && req.method === "POST") {
     const body = await readJsonBody(req);
     return sendJson(res, await hermesJson("/api/sessions", {
@@ -386,6 +393,33 @@ function normalizeHermesSessionsResponse(value) {
     });
   }
   return { sessions };
+}
+
+function normalizeHermesSessionMessagesResponse(value) {
+  const source = Array.isArray(value?.messages) ? value.messages
+    : Array.isArray(value?.items) ? value.items
+      : Array.isArray(value?.data) ? value.data
+        : Array.isArray(value) ? value
+          : [];
+  const messages = [];
+  for (const item of source) {
+    if (!item || typeof item !== "object") continue;
+    const role = stringField(item.role, item.type);
+    const content = stringField(item.content, item.text, item.message, item.rendered);
+    if (!role || !content) continue;
+    messages.push({
+      id: stringField(item.id, item.message_id, item.messageId) || `${messages.length}`,
+      role,
+      content,
+      timestamp: stringField(item.timestamp, item.created_at, item.createdAt),
+      toolName: stringField(item.tool_name, item.toolName, item.name),
+      finishReason: stringField(item.finish_reason, item.finishReason)
+    });
+  }
+  return {
+    sessionId: stringField(value?.session_id, value?.sessionId),
+    messages
+  };
 }
 
 function fallbackSessionTitle(model, id) {

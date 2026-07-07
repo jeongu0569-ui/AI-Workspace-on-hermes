@@ -50,6 +50,7 @@ Implemented:
 - Hermes live chat connection through the Workspace Server
 - Hermes model picker backed by `GET /api/hermes/models`
 - Hermes session resume menu backed by `GET /api/hermes/sessions`
+- Hermes session history loading backed by `GET /api/hermes/sessions/:id/messages`
 - live session creation
 - message submit
 - chat context scope picker
@@ -58,6 +59,7 @@ Implemented:
 - grouped, collapsible thinking/tool activity rows, one activity group per user turn
 - approval and denial buttons for `approval.request` events
 - normalized Hermes session menu titles instead of raw generated session ids
+- macOS activation fix for `swift run AIWorkspace`, so the launched window becomes the key app for keyboard input
 - compact Notes/Code split view sizing for smaller macOS windows
 - explicit sidebar toggle button in the sidebar toolbar
 - iOS-ready source split for file navigation and PDF preview
@@ -102,6 +104,17 @@ Connect button or first message
   -> render hermes.event messages
   -> approval.respond when the user approves or denies a request
 ```
+
+When the user chooses an existing Hermes session, the client first loads saved
+messages from:
+
+```text
+GET /api/hermes/sessions/:id/messages
+```
+
+Then it resumes the live WebSocket session. This keeps the visible chat history
+aligned with the Hermes session instead of showing only local system messages
+such as "Live bridge ready".
 
 The client now treats assistant text and activity as separate streams.
 `message.delta` appends to the assistant bubble. Thinking, reasoning, and tool

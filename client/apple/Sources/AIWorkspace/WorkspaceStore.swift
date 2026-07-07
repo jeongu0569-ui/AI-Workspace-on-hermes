@@ -223,9 +223,17 @@ final class WorkspaceStore: ObservableObject {
             statusMessage = "Invalid server URL"
             return
         }
+        guard let api else {
+            statusMessage = "Invalid server URL"
+            return
+        }
         isLoading = true
         defer { isLoading = false }
         do {
+            let history = try await api.hermesSessionMessages(sessionId: session.id)
+            chatLines = chatLinesFromHistory(history, fallbackTitle: session.title)
+            activeActivityLineId = nil
+            isChatTurnOpen = false
             try await liveClient.connect(baseURL: url) { [weak self] envelope in
                 Task { @MainActor in
                     self?.handleLiveEnvelope(envelope)
@@ -233,8 +241,7 @@ final class WorkspaceStore: ObservableObject {
             }
             try await liveClient.resumeSession(sessionId: session.id)
             liveSessionId = session.id
-            chatLines.append(ChatLine(role: "system", text: "Resumed Hermes session \(session.title)."))
-            statusMessage = "Live session resumed"
+            statusMessage = "Resumed \(session.title)"
         } catch {
             statusMessage = error.localizedDescription
             chatLines.append(ChatLine(role: "system", text: error.localizedDescription))
@@ -296,7 +303,7 @@ final class WorkspaceStore: ObservableObject {
     private func handleLiveEnvelope(_ envelope: LiveEnvelope) {
         switch envelope.kind {
         case "ready":
-            chatLines.append(ChatLine(role: "system", text: "Live bridge ready."))
+            statusMessage = "Live bridge ready"
         case "hermes.event":
             appendHermesEvent(envelope)
         case "hermes.close":
@@ -350,6 +357,39 @@ final class WorkspaceStore: ObservableObject {
         if type == "approval.request" {
             chatLines.append(ChatLine(role: "approval", text: text.isEmpty ? "Approval requested." : text, approvalState: .pending))
             return
+        }
+    }
+
+    private func chatLinesFromHistory(_ messages: [HermesSessionMessage], fallbackTitle: String) -> [ChatLine] {
+        let lines = messages.compactMap { message -> ChatLine? in
+            let role = normalizedHistoryRole(message.role)
+            guard let role else { return nil }
+            if role == "activity" {
+                let label = message.toolName.map { "\($0): \(message.content)" } ?? message.content
+                return ChatLine(role: "activity", text: "Activity · 1 tool", activityItems: [
+                    ChatActivity(type: message.toolName ?? message.role, text: label)
+                ])
+            }
+            return ChatLine(role: role, text: message.content)
+        }
+        if !lines.isEmpty {
+            return lines
+        }
+        return [ChatLine(role: "system", text: "No saved messages for \(fallbackTitle).")]
+    }
+
+    private func normalizedHistoryRole(_ role: String) -> String? {
+        switch role.lowercased() {
+        case "user":
+            return "user"
+        case "assistant":
+            return "assistant"
+        case "system":
+            return "system"
+        case "tool", "function":
+            return "activity"
+        default:
+            return nil
         }
     }
 

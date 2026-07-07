@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 @main
 struct AIWorkspaceApp: App {
@@ -8,6 +11,11 @@ struct AIWorkspaceApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                #if os(macOS)
+                .onAppear {
+                    activateMacAppWindow()
+                }
+                #endif
                 .task {
                     await store.refreshWorkspace()
                 }
@@ -16,3 +24,13 @@ struct AIWorkspaceApp: App {
     }
 }
 
+#if os(macOS)
+@MainActor
+private func activateMacAppWindow() {
+    NSApp.setActivationPolicy(.regular)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+        NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+#endif

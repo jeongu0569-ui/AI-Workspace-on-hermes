@@ -89,6 +89,13 @@ struct WorkspaceAPI {
         return extractHermesSessions(from: object)
     }
 
+    func hermesSessionMessages(sessionId: String) async throws -> [HermesSessionMessage] {
+        var components = try components("/api/hermes/sessions/\(sessionId)/messages")
+        components.percentEncodedPath = "/api/hermes/sessions/\(sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId)/messages"
+        let response: HermesSessionMessagesResponse = try await request(components)
+        return response.messages
+    }
+
     private func get<T: Decodable>(_ path: String) async throws -> T {
         try await request(try components(path))
     }

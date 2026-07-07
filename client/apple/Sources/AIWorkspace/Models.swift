@@ -92,6 +92,20 @@ struct HermesSessionSummary: Identifiable, Hashable {
     let updatedAt: String?
 }
 
+struct HermesSessionMessagesResponse: Codable {
+    let sessionId: String?
+    let messages: [HermesSessionMessage]
+}
+
+struct HermesSessionMessage: Codable, Identifiable, Hashable {
+    let id: String
+    let role: String
+    let content: String
+    let timestamp: String?
+    let toolName: String?
+    let finishReason: String?
+}
+
 enum WorkspaceSection: String, CaseIterable, Identifiable {
     case chat = "Chat"
     case notes = "Notes"

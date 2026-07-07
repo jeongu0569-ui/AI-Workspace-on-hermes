@@ -246,6 +246,44 @@ empty orphan sessions and returns a compact shape:
 }
 ```
 
+### `GET /api/hermes/sessions/:id/messages`
+
+Returns normalized saved messages for a Hermes session.
+
+Current target:
+
+```text
+GET {HERMES_SERVER_URL}/api/sessions/:id/messages
+```
+
+Response:
+
+```json
+{
+  "sessionId": "20260707_...",
+  "messages": [
+    {
+      "id": "756",
+      "role": "user",
+      "content": "안녕. 짧게 대답해줘.",
+      "timestamp": "1783414076.431947",
+      "toolName": "",
+      "finishReason": ""
+    },
+    {
+      "id": "757",
+      "role": "assistant",
+      "content": "안녕하세요.",
+      "timestamp": "1783414086.3953931",
+      "toolName": "",
+      "finishReason": "stop"
+    }
+  ]
+}
+
+The Apple client uses this endpoint before `session.resume` so selecting an
+existing session shows its previous user/assistant messages immediately.
+
 ### `POST /api/hermes/sessions`
 
 Creates a Hermes session through the REST endpoint when available.
