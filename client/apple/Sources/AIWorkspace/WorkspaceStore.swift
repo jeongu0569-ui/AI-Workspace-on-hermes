@@ -108,6 +108,22 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
+    func respondToApproval(lineId: UUID, approved: Bool) async {
+        guard let liveSessionId else {
+            statusMessage = "No live session"
+            return
+        }
+        updateApprovalLine(lineId, state: approved ? .approved : .denied)
+        do {
+            try await liveClient.respondToApproval(sessionId: liveSessionId, approved: approved)
+            statusMessage = approved ? "Approval sent" : "Denial sent"
+        } catch {
+            statusMessage = error.localizedDescription
+            updateApprovalLine(lineId, state: .pending)
+            chatLines.append(ChatLine(role: "system", text: error.localizedDescription))
+        }
+    }
+
     var chatContextLabel: String {
         switch chatContextScope {
         case .none:
@@ -158,9 +174,14 @@ final class WorkspaceStore: ObservableObject {
             return
         }
         if type == "approval.request" {
-            chatLines.append(ChatLine(role: "approval", text: text.isEmpty ? "Approval requested." : text))
+            chatLines.append(ChatLine(role: "approval", text: text.isEmpty ? "Approval requested." : text, approvalState: .pending))
             return
         }
+    }
+
+    private func updateApprovalLine(_ id: UUID, state: ApprovalState) {
+        guard let index = chatLines.firstIndex(where: { $0.id == id }) else { return }
+        chatLines[index].approvalState = state
     }
 
     private func chatContextRequest() -> ContextRequest? {

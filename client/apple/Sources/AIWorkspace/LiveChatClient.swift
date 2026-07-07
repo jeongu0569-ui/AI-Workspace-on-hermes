@@ -55,6 +55,11 @@ struct PromptSubmitParams: Encodable {
     let contextRequest: ContextRequest?
 }
 
+struct ApprovalRespondParams: Encodable {
+    let sessionId: String
+    let approved: Bool
+}
+
 struct ContextRequest: Encodable {
     let scopeType: String
     let scopePath: String?
@@ -99,6 +104,13 @@ actor LiveChatClient {
         _ = try await send(
             command: "prompt.submit",
             params: PromptSubmitParams(sessionId: sessionId, message: message, contextRequest: contextRequest)
+        )
+    }
+
+    func respondToApproval(sessionId: String, approved: Bool) async throws {
+        _ = try await send(
+            command: "approval.respond",
+            params: ApprovalRespondParams(sessionId: sessionId, approved: approved)
         )
     }
 

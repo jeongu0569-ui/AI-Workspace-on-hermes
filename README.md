@@ -133,4 +133,5 @@ Current client shell:
 - Chat view backed by `WS /api/live`
 - live Hermes session creation and message submit
 - chat context picker for current file, current folder, or workspace
+- approval and denial buttons for Hermes approval requests
 - basic assistant/thinking/tool/approval event rendering

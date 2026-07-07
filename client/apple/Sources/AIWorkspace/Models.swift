@@ -93,6 +93,13 @@ struct ChatLine: Identifiable {
     let id = UUID()
     let role: String
     var text: String
+    var approvalState: ApprovalState?
+}
+
+enum ApprovalState: String {
+    case pending
+    case approved
+    case denied
 }
 
 enum ChatContextScope: String, CaseIterable, Identifiable {

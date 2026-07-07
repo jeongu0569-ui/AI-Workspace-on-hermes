@@ -10,7 +10,9 @@ struct ChatHomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(store.chatLines) { line in
-                        MessageBubble(role: line.role, text: line.text)
+                        MessageBubble(line: line) { approved in
+                            Task { await store.respondToApproval(lineId: line.id, approved: approved) }
+                        }
                     }
                 }
                 .padding(24)
@@ -69,18 +71,50 @@ struct ChatHomeView: View {
 }
 
 struct MessageBubble: View {
-    let role: String
-    let text: String
+    let line: ChatLine
+    let onApproval: (Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(role.uppercased())
+            Text(line.role.uppercased())
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text(text)
+            Text(line.text)
                 .textSelection(.enabled)
+            if line.role == "approval", let state = line.approvalState {
+                approvalControls(state)
+            }
         }
         .padding(12)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func approvalControls(_ state: ApprovalState) -> some View {
+        switch state {
+        case .pending:
+            HStack(spacing: 12) {
+                Button {
+                    onApproval(true)
+                } label: {
+                    Label("Approve", systemImage: "checkmark.circle")
+                }
+                Button {
+                    onApproval(false)
+                } label: {
+                    Label("Deny", systemImage: "xmark.circle")
+                }
+            }
+            .buttonStyle(.borderless)
+            .padding(.top, 4)
+        case .approved:
+            Label("Approved", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .denied:
+            Label("Denied", systemImage: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
     }
 }

@@ -47,6 +47,7 @@ Implemented:
 - chat context scope picker
 - `contextRequest` forwarding for current file, current folder, and workspace scopes
 - basic live event rendering for assistant, thinking, tool, approval, and system events
+- approval and denial buttons for `approval.request` events
 
 Not yet implemented:
 
@@ -54,7 +55,6 @@ Not yet implemented:
 - markdown editing and save
 - PDF rendering
 - model/session picker UI
-- approval action buttons
 - rich thinking/tool grouping
 - iOS target packaging
 
@@ -92,6 +92,7 @@ Connect button or first message
   -> session.create
   -> prompt.submit with optional contextRequest
   -> render hermes.event messages
+  -> approval.respond when the user approves or denies a request
 ```
 
 The first implementation intentionally keeps the UI plain. It renders live
