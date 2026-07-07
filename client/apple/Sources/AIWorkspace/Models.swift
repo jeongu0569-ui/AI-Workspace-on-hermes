@@ -79,6 +79,19 @@ struct SearchResponse: Codable {
     let results: [Result]
 }
 
+struct HermesModelOption: Identifiable, Hashable {
+    var id: String { provider.map { "\($0):\(model)" } ?? model }
+    let label: String
+    let provider: String?
+    let model: String
+}
+
+struct HermesSessionSummary: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let updatedAt: String?
+}
+
 enum WorkspaceSection: String, CaseIterable, Identifiable {
     case chat = "Chat"
     case notes = "Notes"

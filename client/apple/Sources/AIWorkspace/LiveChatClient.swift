@@ -49,6 +49,10 @@ struct CreateSessionParams: Encodable {
     let accessMode: String?
 }
 
+struct ResumeSessionParams: Encodable {
+    let sessionId: String
+}
+
 struct PromptSubmitParams: Encodable {
     let sessionId: String
     let message: String
@@ -98,6 +102,13 @@ actor LiveChatClient {
             throw LiveChatClientError.serverError("Hermes did not return a session id.")
         }
         return sessionId
+    }
+
+    func resumeSession(sessionId: String) async throws {
+        _ = try await send(
+            command: "session.resume",
+            params: ResumeSessionParams(sessionId: sessionId)
+        )
     }
 
     func submit(sessionId: String, message: String, contextRequest: ContextRequest? = nil) async throws {

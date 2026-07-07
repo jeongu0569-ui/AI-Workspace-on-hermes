@@ -133,6 +133,7 @@ Current client shell:
 - PDF and image preview through `GET /api/raw`
 - search form backed by `POST /api/search`
 - Chat view backed by `WS /api/live`
+- Hermes model picker and session resume menu
 - live Hermes session creation and message submit
 - chat context picker for current file, current folder, or workspace
 - approval and denial buttons for Hermes approval requests

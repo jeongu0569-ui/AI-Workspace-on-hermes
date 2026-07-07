@@ -17,6 +17,9 @@ final class WorkspaceStore: ObservableObject {
         ChatLine(role: "system", text: "Connect to the Workspace Server, then start a Hermes live session.")
     ]
     @Published var liveSessionId: String?
+    @Published var hermesModels: [HermesModelOption] = []
+    @Published var hermesSessions: [HermesSessionSummary] = []
+    @Published var selectedHermesModelId = ""
     @Published var chatContextScope: ChatContextScope = .currentFile
     @Published var statusMessage = "Not connected"
     @Published var isLoading = false
@@ -45,9 +48,23 @@ final class WorkspaceStore: ObservableObject {
             let codeTree = try await api.tree(root: "code", path: codePath)
             notes = notesTree.children
             code = codeTree.children
+            await refreshHermesMetadata()
             statusMessage = "Connected"
         } catch {
             statusMessage = error.localizedDescription
+        }
+    }
+
+    func refreshHermesMetadata() async {
+        guard let api else { return }
+        do {
+            hermesModels = try await api.hermesModelOptions()
+            hermesSessions = try await api.hermesSessions()
+            if selectedHermesModelId.isEmpty {
+                selectedHermesModelId = hermesModels.first?.id ?? ""
+            }
+        } catch {
+            statusMessage = "Hermes metadata: \(error.localizedDescription)"
         }
     }
 
@@ -188,10 +205,34 @@ final class WorkspaceStore: ObservableObject {
                     self?.handleLiveEnvelope(envelope)
                 }
             }
-            let sessionId = try await liveClient.createSession()
+            let selectedModel = selectedHermesModel
+            let sessionId = try await liveClient.createSession(provider: selectedModel?.provider, model: selectedModel?.model)
             liveSessionId = sessionId
             chatLines.append(ChatLine(role: "system", text: "Connected to Hermes live session \(sessionId)."))
             statusMessage = "Live chat connected"
+        } catch {
+            statusMessage = error.localizedDescription
+            chatLines.append(ChatLine(role: "system", text: error.localizedDescription))
+        }
+    }
+
+    func resumeHermesSession(_ session: HermesSessionSummary) async {
+        guard let url = URL(string: serverURLText) else {
+            statusMessage = "Invalid server URL"
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            try await liveClient.connect(baseURL: url) { [weak self] envelope in
+                Task { @MainActor in
+                    self?.handleLiveEnvelope(envelope)
+                }
+            }
+            try await liveClient.resumeSession(sessionId: session.id)
+            liveSessionId = session.id
+            chatLines.append(ChatLine(role: "system", text: "Resumed Hermes session \(session.title)."))
+            statusMessage = "Live session resumed"
         } catch {
             statusMessage = error.localizedDescription
             chatLines.append(ChatLine(role: "system", text: error.localizedDescription))
@@ -242,6 +283,10 @@ final class WorkspaceStore: ObservableObject {
         case .workspace:
             "Workspace root"
         }
+    }
+
+    var selectedHermesModel: HermesModelOption? {
+        hermesModels.first { $0.id == selectedHermesModelId }
     }
 
     private func handleLiveEnvelope(_ envelope: LiveEnvelope) {

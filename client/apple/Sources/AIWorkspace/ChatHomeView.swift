@@ -21,6 +21,53 @@ struct ChatHomeView: View {
             Divider()
             VStack(spacing: 10) {
                 HStack(spacing: 10) {
+                    Picker("Model", selection: $store.selectedHermesModelId) {
+                        if store.hermesModels.isEmpty {
+                            Text("Default Hermes model").tag("")
+                        } else {
+                            ForEach(store.hermesModels) { model in
+                                Text(model.label).tag(model.id)
+                            }
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 260)
+                    .help("Model for the next new Hermes live session")
+
+                    Menu {
+                        if store.hermesSessions.isEmpty {
+                            Text("No sessions loaded")
+                        } else {
+                            ForEach(store.hermesSessions) { session in
+                                Button {
+                                    Task { await store.resumeHermesSession(session) }
+                                } label: {
+                                    VStack(alignment: .leading) {
+                                        Text(session.title)
+                                        if let updatedAt = session.updatedAt {
+                                            Text(updatedAt)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Sessions", systemImage: "clock.arrow.circlepath")
+                    }
+                    .menuStyle(.borderlessButton)
+
+                    Button {
+                        Task { await store.refreshHermesMetadata() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Refresh Hermes models and sessions")
+
+                    Spacer()
+                }
+
+                HStack(spacing: 10) {
                     Picker("Context", selection: $store.chatContextScope) {
                         ForEach(ChatContextScope.allCases) { scope in
                             Label(scope.label, systemImage: scope.systemImage)

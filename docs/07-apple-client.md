@@ -46,6 +46,8 @@ Implemented:
 - image preview through `GET /api/raw`
 - workspace search UI
 - Hermes live chat connection through the Workspace Server
+- Hermes model picker backed by `GET /api/hermes/models`
+- Hermes session resume menu backed by `GET /api/hermes/sessions`
 - live session creation
 - message submit
 - chat context scope picker
@@ -55,7 +57,6 @@ Implemented:
 
 Not yet implemented:
 
-- model/session picker UI
 - rich thinking/tool grouping
 - iOS target packaging
 

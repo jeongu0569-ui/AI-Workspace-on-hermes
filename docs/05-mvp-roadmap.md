@@ -60,7 +60,7 @@ Status: in progress.
 - Notes file tree. Recursive Notes and Code folder navigation done in the macOS client.
 - Markdown editor. Basic text/markdown/code editing and save done in the macOS client.
 - PDF viewer through server raw file endpoint. Basic macOS PDFKit rendering and image raw preview done.
-- Hermes chat view. Live `/api/live` wiring, context scope picker, and approval controls done in the macOS client.
+- Hermes chat view. Live `/api/live` wiring, model picker, session resume menu, context scope picker, and approval controls done in the macOS client.
 - Search view. Done with `POST /api/search`.
 
 Remaining:
