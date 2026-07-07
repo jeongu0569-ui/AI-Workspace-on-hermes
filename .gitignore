@@ -4,4 +4,5 @@ node_modules/
 HermesWorkspace/
 .hermes-workspace/
 coverage/
-
+.build/
+client/apple/.build/

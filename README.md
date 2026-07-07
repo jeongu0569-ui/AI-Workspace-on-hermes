@@ -45,7 +45,7 @@ This repository currently contains the first server-side scaffold:
 - fallback workspace text search API
 - architecture, API, data model, and roadmap docs
 
-The UI app will be added after the server API stabilizes.
+The first macOS SwiftUI client shell lives in `client/apple`.
 
 ## Run The Server
 
@@ -110,3 +110,23 @@ to the client.
 - [Data model](docs/04-data-model.md)
 - [MVP roadmap](docs/05-mvp-roadmap.md)
 - [Hermes integration notes](docs/06-hermes-integration.md)
+- [Apple client](docs/07-apple-client.md)
+
+## Run The macOS Client Shell
+
+The first client is a Swift Package so it can build without a full Xcode project.
+
+```bash
+cd client/apple
+swift run AIWorkspace
+```
+
+Current client shell:
+
+- sidebar with Chat, Notes, Code, Search
+- server URL setting
+- workspace status
+- Notes and Code root listing
+- text/markdown file preview
+- search form backed by `POST /api/search`
+- Chat placeholder ready for `/api/live` wiring

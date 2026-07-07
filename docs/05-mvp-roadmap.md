@@ -50,17 +50,26 @@ Remaining:
 
 ## Phase 3: Apple Client MVP
 
-Status: planned.
+Status: in progress.
 
-- SwiftUI app shell.
+- SwiftUI app shell. Done as `client/apple` Swift Package.
 - Sidebar:
   - Chat
   - Notes
   - Code
-- Notes file tree.
+- Notes file tree. Initial root listing done.
 - Markdown editor.
 - PDF viewer through server raw file endpoint.
-- Hermes chat view.
+- Hermes chat view. Placeholder done; live `/api/live` wiring remains.
+- Search view. Done with `POST /api/search`.
+
+Remaining:
+
+- Recursive folder navigation.
+- Markdown editing and save.
+- PDF/raw file viewer.
+- `/api/live` chat client wiring.
+- iOS target/project packaging.
 
 ## Phase 4: Notes Context Router
 
