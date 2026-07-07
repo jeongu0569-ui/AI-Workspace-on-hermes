@@ -219,12 +219,31 @@ GET {HERMES_SERVER_URL}/api/model/options
 
 ### `GET /api/hermes/sessions`
 
-Proxies Hermes sessions.
+Returns normalized Hermes sessions for client menus.
 
 Current target:
 
 ```text
 GET {HERMES_SERVER_URL}/api/sessions?limit=200
+```
+
+Hermes may return raw session rows where `title` is empty and the generated
+session id is the only stable value. The Workspace Server filters archived or
+empty orphan sessions and returns a compact shape:
+
+```json
+{
+  "sessions": [
+    {
+      "id": "20260707_...",
+      "title": "Hermes AI Introduction",
+      "model": "gemma4:e2b-mlx",
+      "preview": "안녕",
+      "updatedAt": "1783412528.4681878",
+      "isActive": false
+    }
+  ]
+}
 ```
 
 ### `POST /api/hermes/sessions`

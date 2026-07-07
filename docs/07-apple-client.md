@@ -55,8 +55,11 @@ Implemented:
 - chat context scope picker
 - `contextRequest` forwarding for current file, current folder, and workspace scopes
 - basic live event rendering for assistant, thinking, tool, approval, and system events
-- grouped, collapsible thinking/tool activity rows
+- grouped, collapsible thinking/tool activity rows, one activity group per user turn
 - approval and denial buttons for `approval.request` events
+- normalized Hermes session menu titles instead of raw generated session ids
+- compact Notes/Code split view sizing for smaller macOS windows
+- explicit sidebar toggle button in the sidebar toolbar
 - iOS-ready source split for file navigation and PDF preview
 
 Not yet implemented:
@@ -100,9 +103,12 @@ Connect button or first message
   -> approval.respond when the user approves or denies a request
 ```
 
-The first implementation intentionally keeps the UI plain. It renders live
-events as chat rows so the transport can be tested before adding richer Codex-
-style grouped thinking and tool panels.
+The client now treats assistant text and activity as separate streams.
+`message.delta` appends to the assistant bubble. Thinking, reasoning, and tool
+events are grouped into a single collapsible activity row for the current user
+turn. `message.complete`, `turn.complete`, and related completion events close
+the current activity group so late events do not create extra rows after the
+answer.
 
 ## Chat Context Scopes
 

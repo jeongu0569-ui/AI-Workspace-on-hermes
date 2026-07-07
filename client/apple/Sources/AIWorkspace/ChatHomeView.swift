@@ -97,13 +97,12 @@ struct ChatHomeView: View {
 
                     TextField("Message Hermes...", text: $draft, axis: .vertical)
                         .textFieldStyle(.plain)
-                        .lineLimit(1...5)
+                        .lineLimit(1...4)
                         .padding(10)
                         .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                        .onSubmit(sendDraft)
                     Button {
-                        let message = draft
-                        draft = ""
-                        Task { await store.sendChatMessage(message) }
+                        sendDraft()
                     } label: {
                         Image(systemName: "paperplane.fill")
                     }
@@ -114,6 +113,12 @@ struct ChatHomeView: View {
             }
             .padding(16)
         }
+    }
+
+    private func sendDraft() {
+        let message = draft
+        draft = ""
+        Task { await store.sendChatMessage(message) }
     }
 }
 
@@ -154,16 +159,16 @@ struct MessageBubble: View {
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 1)
                 }
             }
-            .padding(.top, 6)
+            .padding(.top, 4)
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "sparkles")
+                Image(systemName: "waveform.path")
                     .foregroundStyle(.secondary)
                 Text(line.text)
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
                 Spacer()
             }

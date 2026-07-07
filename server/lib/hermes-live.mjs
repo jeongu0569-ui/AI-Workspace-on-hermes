@@ -229,8 +229,28 @@ function normalizeHermesEvent(event) {
 }
 
 function payloadText(payload) {
-  for (const key of ["text", "rendered", "message", "preview", "summary", "description", "command", "name", "status"]) {
+  for (const key of [
+    "text",
+    "delta",
+    "content",
+    "output_text",
+    "rendered",
+    "message",
+    "preview",
+    "summary",
+    "description",
+    "command",
+    "name",
+    "status"
+  ]) {
     if (typeof payload?.[key] === "string" && payload[key]) return payload[key];
+  }
+  if (Array.isArray(payload?.content)) {
+    const text = payload.content
+      .map((item) => item?.text || item?.content || item?.delta || "")
+      .filter(Boolean)
+      .join("");
+    if (text) return text;
   }
   if (payload && typeof payload === "object" && Object.keys(payload).length) {
     return JSON.stringify(payload);

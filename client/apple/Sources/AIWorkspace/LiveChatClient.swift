@@ -72,22 +72,27 @@ struct ContextRequest: Encodable {
 
 actor LiveChatClient {
     private var task: URLSessionWebSocketTask?
+    private var connectedURL: URL?
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private var continuations: [String: CheckedContinuation<LiveEnvelope, Error>] = [:]
     private var onEvent: (@Sendable (LiveEnvelope) -> Void)?
 
     func connect(baseURL: URL, onEvent: @escaping @Sendable (LiveEnvelope) -> Void) async throws {
-        disconnect()
-        self.onEvent = onEvent
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw LiveChatClientError.invalidURL
         }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.path = "/api/live"
         guard let url = components.url else { throw LiveChatClientError.invalidURL }
+        self.onEvent = onEvent
+        if task != nil, connectedURL == url {
+            return
+        }
+        disconnect()
         let task = URLSession.shared.webSocketTask(with: url)
         self.task = task
+        connectedURL = url
         task.resume()
         receiveLoop()
         _ = try await send(command: "connect", params: EmptyParams())
@@ -128,6 +133,7 @@ actor LiveChatClient {
     func disconnect() {
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        connectedURL = nil
         for continuation in continuations.values {
             continuation.resume(throwing: LiveChatClientError.disconnected)
         }
@@ -166,6 +172,8 @@ actor LiveChatClient {
     private func handleReceiveResult(_ result: Result<URLSessionWebSocketTask.Message, Error>) {
         switch result {
         case let .failure(error):
+            task = nil
+            connectedURL = nil
             for continuation in continuations.values {
                 continuation.resume(throwing: error)
             }

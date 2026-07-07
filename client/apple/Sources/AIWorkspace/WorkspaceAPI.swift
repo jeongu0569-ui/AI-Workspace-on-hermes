@@ -149,11 +149,17 @@ private func extractHermesModels(from object: Any) -> [HermesModelOption] {
     var models: [HermesModelOption] = []
     collectHermesModels(from: object, provider: nil, into: &models)
     var seen = Set<String>()
-    return models.filter { seen.insert($0.id).inserted }
+    return models.filter {
+        !$0.id.isEmpty
+            && $0.id != "<null>"
+            && !$0.model.isEmpty
+            && $0.model != "<null>"
+            && seen.insert($0.id).inserted
+    }
 }
 
 private func collectHermesModels(from object: Any, provider: String?, into models: inout [HermesModelOption]) {
-    if let value = object as? String {
+    if let value = stringValue(object) {
         models.append(HermesModelOption(label: provider.map { "\($0) / \(value)" } ?? value, provider: provider, model: value))
         return
     }
@@ -192,7 +198,11 @@ private func extractHermesSessions(from object: Any) -> [HermesSessionSummary] {
     var sessions: [HermesSessionSummary] = []
     collectHermesSessions(from: object, into: &sessions)
     var seen = Set<String>()
-    return sessions.filter { seen.insert($0.id).inserted }
+    return sessions.filter {
+        !$0.id.isEmpty
+            && $0.id != "<null>"
+            && seen.insert($0.id).inserted
+    }
 }
 
 private func collectHermesSessions(from object: Any, into sessions: inout [HermesSessionSummary]) {
@@ -208,15 +218,28 @@ private func collectHermesSessions(from object: Any, into sessions: inout [Herme
         ?? stringValue(dict["sessionId"])
         ?? stringValue(dict["stored_session_id"])
         ?? stringValue(dict["storedSessionId"]) {
-        let title = stringValue(dict["title"])
+        if boolValue(dict["archived"]) == true {
+            return
+        }
+        let preview = stringValue(dict["preview"])
+        let messageCount = intValue(dict["message_count"]) ?? intValue(dict["messageCount"]) ?? 0
+        let explicitTitle = stringValue(dict["display_name"])
+            ?? stringValue(dict["displayName"])
+            ?? stringValue(dict["title"])
             ?? stringValue(dict["name"])
             ?? stringValue(dict["summary"])
-            ?? id
+        let title = explicitTitle
+            ?? preview
+            ?? fallbackSessionTitle(model: stringValue(dict["model"]), id: id)
         let updatedAt = stringValue(dict["updated_at"])
             ?? stringValue(dict["updatedAt"])
             ?? stringValue(dict["modified_at"])
             ?? stringValue(dict["modifiedAt"])
-        sessions.append(HermesSessionSummary(id: id, title: title, updatedAt: updatedAt))
+            ?? stringValue(dict["last_active"])
+            ?? stringValue(dict["lastActive"])
+        if messageCount > 0 || preview != nil || explicitTitle != nil {
+            sessions.append(HermesSessionSummary(id: id, title: title, updatedAt: updatedAt))
+        }
     }
     for key in ["sessions", "items", "data", "results"] {
         if let nested = dict[key] {
@@ -226,7 +249,61 @@ private func collectHermesSessions(from object: Any, into sessions: inout [Herme
 }
 
 private func stringValue(_ value: Any?) -> String? {
-    if let value = value as? String, !value.isEmpty { return value }
-    if let value = value as? CustomStringConvertible { return String(describing: value) }
+    guard let value, !(value is NSNull) else { return nil }
+
+    if let value = value as? String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed == "<null>" ? nil : trimmed
+    }
+
+    if let value = value as? NSNumber {
+        return value.stringValue
+    }
+
     return nil
+}
+
+private func intValue(_ value: Any?) -> Int? {
+    if let value = value as? Int { return value }
+    if let value = value as? NSNumber { return value.intValue }
+    if let value = stringValue(value) { return Int(value) }
+    return nil
+}
+
+private func boolValue(_ value: Any?) -> Bool? {
+    if let value = value as? Bool { return value }
+    if let value = value as? NSNumber { return value.boolValue }
+    if let value = stringValue(value) {
+        switch value.lowercased() {
+        case "true", "1", "yes": return true
+        case "false", "0", "no": return false
+        default: return nil
+        }
+    }
+    return nil
+}
+
+private func fallbackSessionTitle(model: String?, id: String) -> String {
+    if let model {
+        return "Chat with \(model)"
+    }
+    if let date = generatedSessionDate(id) {
+        return "Chat \(date)"
+    }
+    return "Untitled chat"
+}
+
+private func generatedSessionDate(_ id: String) -> String? {
+    let pattern = #"^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: id, range: NSRange(id.startIndex..., in: id)),
+          match.numberOfRanges >= 7 else {
+        return nil
+    }
+    let parts = (1..<7).compactMap { index -> String? in
+        guard let range = Range(match.range(at: index), in: id) else { return nil }
+        return String(id[range])
+    }
+    guard parts.count == 6 else { return nil }
+    return "\(parts[0])-\(parts[1])-\(parts[2]) \(parts[3]):\(parts[4])"
 }

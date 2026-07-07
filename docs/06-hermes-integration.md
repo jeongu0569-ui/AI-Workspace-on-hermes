@@ -81,6 +81,50 @@ POST /api/sessions
 But live chat should use `/api/live` when available because REST fallback may
 not show full reasoning/tool/approval activity.
 
+`GET /api/hermes/sessions` is intentionally normalized by the Workspace Server.
+Hermes can return raw database rows where `title` is empty and the only stable
+identifier is a generated id such as `20260707_...`. The Workspace API filters
+archived or empty orphan sessions and returns client-friendly rows:
+
+```json
+{
+  "sessions": [
+    {
+      "id": "20260707_...",
+      "title": "Hermes AI Introduction",
+      "model": "gemma4:e2b-mlx",
+      "preview": "안녕",
+      "updatedAt": "1783412528.4681878",
+      "isActive": false
+    }
+  ]
+}
+```
+
+This keeps Swift/iOS clients from showing raw generated ids as chat titles.
+
+## Live Event Handling
+
+Hermes live streams do not always finish with the same event name. In local
+testing with `gemma4:e2b-mlx`, the stream ended with `message.complete` rather
+than `turn.complete`. Clients should treat all of these as turn-ending signals:
+
+```text
+message.done
+message.complete
+message.completed
+response.done
+response.complete
+response.completed
+turn.complete
+turn.completed
+```
+
+The Apple client renders only message delta events as assistant text and groups
+thinking/reasoning/tool events into one collapsible activity row per user turn.
+This avoids duplicated assistant text and prevents late tool/reasoning events
+from appearing as separate chat rows after the answer.
+
 ## Context Metadata Shape
 
 The app should send a `contextRequest` to the Workspace Server. The server

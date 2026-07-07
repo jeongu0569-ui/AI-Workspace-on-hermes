@@ -10,10 +10,10 @@ struct FileSectionView: View {
         #if os(macOS)
         HSplitView {
             FileBrowserPane(title: title, root: root)
-                .frame(minWidth: 280, idealWidth: 340)
+                .frame(minWidth: 220, idealWidth: 300)
 
             FilePreviewView()
-                .frame(minWidth: 480)
+                .frame(minWidth: 320)
         }
         #else
         VStack(spacing: 0) {
@@ -79,9 +79,13 @@ struct FileBrowserPane: View {
                             .foregroundStyle(item.isDirectory ? .blue : .secondary)
                         VStack(alignment: .leading) {
                             Text(item.name)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                             Text(item.path)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
                         Spacer()
                         if item.isDirectory {

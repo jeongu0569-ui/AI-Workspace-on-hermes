@@ -345,7 +345,7 @@ async function handleHermesProxy(req, res, url) {
     return sendJson(res, await hermesJson("/api/model/options"));
   }
   if (url.pathname === "/api/hermes/sessions" && req.method === "GET") {
-    return sendJson(res, await hermesJson("/api/sessions?limit=200"));
+    return sendJson(res, normalizeHermesSessionsResponse(await hermesJson("/api/sessions?limit=200")));
   }
   if (url.pathname === "/api/hermes/sessions" && req.method === "POST") {
     const body = await readJsonBody(req);
@@ -355,6 +355,57 @@ async function handleHermesProxy(req, res, url) {
     }), 201);
   }
   throw Object.assign(new Error("Unknown Hermes proxy endpoint."), { status: 404 });
+}
+
+function normalizeHermesSessionsResponse(value) {
+  const source = Array.isArray(value?.sessions) ? value.sessions
+    : Array.isArray(value?.items) ? value.items
+      : Array.isArray(value?.data) ? value.data
+        : Array.isArray(value) ? value
+          : [];
+  const seen = new Set();
+  const sessions = [];
+  for (const item of source) {
+    if (!item || typeof item !== "object" || item.archived) continue;
+    const id = stringField(item.id, item.session_id, item.sessionId, item.stored_session_id, item.storedSessionId);
+    if (!id || seen.has(id)) continue;
+    const preview = stringField(item.preview);
+    const messageCount = Number(item.message_count ?? item.messageCount ?? 0);
+    const explicitTitle = stringField(item.display_name, item.displayName, item.title, item.name, item.summary);
+    const title = explicitTitle || preview
+      || fallbackSessionTitle(item.model, id);
+    if (messageCount <= 0 && !preview && !explicitTitle) continue;
+    seen.add(id);
+    sessions.push({
+      id,
+      title,
+      model: stringField(item.model),
+      preview,
+      updatedAt: stringField(item.updated_at, item.updatedAt, item.modified_at, item.modifiedAt, item.last_active, item.lastActive),
+      isActive: Boolean(item.is_active ?? item.isActive)
+    });
+  }
+  return { sessions };
+}
+
+function fallbackSessionTitle(model, id) {
+  if (model) return `Chat with ${model}`;
+  const date = generatedSessionDate(id);
+  return date ? `Chat ${date}` : "Untitled chat";
+}
+
+function generatedSessionDate(value) {
+  const match = String(value || "").match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_/);
+  return match ? `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}` : "";
+}
+
+function stringField(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text && text !== "<null>") return text;
+  }
+  return "";
 }
 
 async function hermesJson(endpoint, options = {}) {

@@ -25,6 +25,8 @@ final class WorkspaceStore: ObservableObject {
     @Published var isLoading = false
 
     private let liveClient = LiveChatClient()
+    private var activeActivityLineId: UUID?
+    private var isChatTurnOpen = false
 
     var api: WorkspaceAPI? {
         guard let url = URL(string: serverURLText) else { return nil }
@@ -247,6 +249,8 @@ final class WorkspaceStore: ObservableObject {
         }
         guard let liveSessionId else { return }
         chatLines.append(ChatLine(role: "user", text: trimmed))
+        activeActivityLineId = nil
+        isChatTurnOpen = true
         do {
             try await liveClient.submit(sessionId: liveSessionId, message: trimmed, contextRequest: chatContextRequest())
             statusMessage = "Message sent"
@@ -307,7 +311,8 @@ final class WorkspaceStore: ObservableObject {
     private func appendHermesEvent(_ envelope: LiveEnvelope) {
         let type = envelope.type ?? "event"
         let text = envelope.text ?? ""
-        if type == "message.delta" {
+        if isAssistantDelta(type) {
+            guard !text.isEmpty else { return }
             if chatLines.last?.role == "assistant" {
                 chatLines[chatLines.count - 1].text += text
             } else {
@@ -315,14 +320,31 @@ final class WorkspaceStore: ObservableObject {
             }
             return
         }
+
+        if type == "message.done"
+            || type == "response.done"
+            || type == "content.done"
+            || type == "message.completed"
+            || type == "response.completed"
+            || type == "message.complete"
+            || type == "response.complete"
+            || type == "turn.complete"
+            || type == "turn.completed" {
+            isChatTurnOpen = false
+            activeActivityLineId = nil
+            return
+        }
+
         if type.contains("thinking") || type.contains("reasoning") {
-            if !text.isEmpty {
+            if isChatTurnOpen && !text.isEmpty {
                 appendActivity(type: type, text: text)
             }
             return
         }
         if type.contains("tool") {
-            appendActivity(type: type, text: text)
+            if isChatTurnOpen {
+                appendActivity(type: type, text: text)
+            }
             return
         }
         if type == "approval.request" {
@@ -338,11 +360,14 @@ final class WorkspaceStore: ObservableObject {
 
     private func appendActivity(type: String, text: String) {
         let item = ChatActivity(type: type, text: text.isEmpty ? type : text)
-        if chatLines.last?.role == "activity" {
-            chatLines[chatLines.count - 1].activityItems.append(item)
-            chatLines[chatLines.count - 1].text = activitySummary(chatLines[chatLines.count - 1].activityItems)
+        if let activeActivityLineId,
+           let index = chatLines.firstIndex(where: { $0.id == activeActivityLineId }) {
+            chatLines[index].activityItems.append(item)
+            chatLines[index].text = activitySummary(chatLines[index].activityItems)
         } else {
-            chatLines.append(ChatLine(role: "activity", text: activitySummary([item]), activityItems: [item]))
+            let line = ChatLine(role: "activity", text: activitySummary([item]), activityItems: [item])
+            activeActivityLineId = line.id
+            chatLines.append(line)
         }
     }
 
@@ -350,10 +375,16 @@ final class WorkspaceStore: ObservableObject {
         let toolCount = items.filter { $0.type.contains("tool") }.count
         let thoughtCount = items.count - toolCount
         let parts = [
-            thoughtCount > 0 ? "\(thoughtCount) thinking" : nil,
-            toolCount > 0 ? "\(toolCount) tool" : nil
+            thoughtCount > 0 ? "\(thoughtCount) thoughts" : nil,
+            toolCount > 0 ? "\(toolCount) tools" : nil
         ].compactMap { $0 }
-        return parts.isEmpty ? "Activity" : "Activity: " + parts.joined(separator: ", ")
+        return parts.isEmpty ? "Activity" : "Activity · " + parts.joined(separator: " · ")
+    }
+
+    private func isAssistantDelta(_ type: String) -> Bool {
+        type == "message.delta"
+            || type == "assistant.delta"
+            || type == "assistant.message.delta"
     }
 
     private func chatContextRequest() -> ContextRequest? {
