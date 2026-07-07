@@ -23,6 +23,7 @@ final class WorkspaceStore: ObservableObject {
     @Published var chatContextScope: ChatContextScope = .currentFile
     @Published var statusMessage = "Not connected"
     @Published var isLoading = false
+    @Published var sessionManagerSearch = ""
 
     private let liveClient = LiveChatClient()
     private var activeActivityLineId: UUID?
@@ -194,7 +195,15 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
-    func connectLiveChat() async {
+    func prepareNewChat() {
+        liveSessionId = nil
+        activeActivityLineId = nil
+        isChatTurnOpen = false
+        chatLines = [ChatLine(role: "system", text: "New chat ready. Send a message to create a Hermes session.")]
+        statusMessage = "New chat ready"
+    }
+
+    func startNewHermesSession() async {
         guard let url = URL(string: serverURLText) else {
             statusMessage = "Invalid server URL"
             return
@@ -210,12 +219,21 @@ final class WorkspaceStore: ObservableObject {
             let selectedModel = selectedHermesModel
             let sessionId = try await liveClient.createSession(provider: selectedModel?.provider, model: selectedModel?.model)
             liveSessionId = sessionId
-            chatLines.append(ChatLine(role: "system", text: "Connected to Hermes live session \(sessionId)."))
-            statusMessage = "Live chat connected"
+            activeActivityLineId = nil
+            isChatTurnOpen = false
+            if chatLines.allSatisfy({ $0.role == "system" }) {
+                chatLines.removeAll()
+            }
+            statusMessage = "New live session connected"
+            await refreshHermesMetadata()
         } catch {
             statusMessage = error.localizedDescription
             chatLines.append(ChatLine(role: "system", text: error.localizedDescription))
         }
+    }
+
+    func connectLiveChat() async {
+        await startNewHermesSession()
     }
 
     func resumeHermesSession(_ session: HermesSessionSummary) async {
@@ -252,7 +270,7 @@ final class WorkspaceStore: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if liveSessionId == nil {
-            await connectLiveChat()
+            await startNewHermesSession()
         }
         guard let liveSessionId else { return }
         chatLines.append(ChatLine(role: "user", text: trimmed))
@@ -264,6 +282,33 @@ final class WorkspaceStore: ObservableObject {
         } catch {
             statusMessage = error.localizedDescription
             chatLines.append(ChatLine(role: "system", text: error.localizedDescription))
+        }
+    }
+
+    func deleteHermesSession(_ session: HermesSessionSummary) async {
+        guard let api else { return }
+        if session.id == liveSessionId {
+            statusMessage = "Cannot delete the active session"
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            try await api.deleteHermesSession(sessionId: session.id)
+            hermesSessions.removeAll { $0.id == session.id }
+            statusMessage = "Deleted \(session.title)"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    var filteredHermesSessions: [HermesSessionSummary] {
+        let query = sessionManagerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return hermesSessions }
+        return hermesSessions.filter {
+            $0.title.lowercased().contains(query)
+                || $0.id.lowercased().contains(query)
+                || ($0.updatedAt ?? "").lowercased().contains(query)
         }
     }
 

@@ -3,6 +3,7 @@ import SwiftUI
 struct ChatHomeView: View {
     @EnvironmentObject private var store: WorkspaceStore
     @State private var draft = ""
+    @State private var showingSessionManager = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -88,12 +89,20 @@ struct ChatHomeView: View {
 
                 HStack(spacing: 12) {
                     Button {
-                        Task { await store.connectLiveChat() }
+                        store.prepareNewChat()
                     } label: {
-                        Image(systemName: "bolt.horizontal")
+                        Image(systemName: "plus")
                     }
                     .buttonStyle(.borderless)
-                    .help("Connect live Hermes session")
+                    .help("New chat")
+
+                    Button {
+                        showingSessionManager = true
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Search and manage sessions")
 
                     TextField("Message Hermes...", text: $draft, axis: .vertical)
                         .textFieldStyle(.plain)
@@ -113,12 +122,113 @@ struct ChatHomeView: View {
             }
             .padding(16)
         }
+        .sheet(isPresented: $showingSessionManager) {
+            SessionManagerView(isPresented: $showingSessionManager)
+                .environmentObject(store)
+        }
     }
 
     private func sendDraft() {
         let message = draft
         draft = ""
         Task { await store.sendChatMessage(message) }
+    }
+}
+
+struct SessionManagerView: View {
+    @EnvironmentObject private var store: WorkspaceStore
+    @Binding var isPresented: Bool
+    @State private var pendingDelete: HermesSessionSummary?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("History")
+                        .font(.title2.weight(.semibold))
+                    Text("Search and manage Hermes sessions.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    Task { await store.refreshHermesMetadata() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                Button {
+                    isPresented = false
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+            }
+
+            TextField("Search session title...", text: $store.sessionManagerSearch)
+                .textFieldStyle(.roundedBorder)
+
+            if store.filteredHermesSessions.isEmpty {
+                ContentUnavailableView("No sessions", systemImage: "clock", description: Text("No saved Hermes sessions match this search."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(store.filteredHermesSessions) { session in
+                    HStack(spacing: 12) {
+                        Button {
+                            Task {
+                                await store.resumeHermesSession(session)
+                                isPresented = false
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(session.title)
+                                    .lineLimit(1)
+                                if let updatedAt = session.updatedAt {
+                                    Text(updatedAt)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(role: .destructive) {
+                            pendingDelete = session
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(session.id == store.liveSessionId)
+                        .help(session.id == store.liveSessionId ? "Cannot delete the active session" : "Delete session")
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 480, minHeight: 420)
+        .confirmationDialog(
+            "Delete this Hermes session?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { session in
+            Button("Delete \(session.title)", role: .destructive) {
+                Task {
+                    await store.deleteHermesSession(session)
+                    pendingDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDelete = nil
+            }
+        } message: { session in
+            Text("This deletes the saved Hermes session, not just the local row: \(session.title)")
+        }
     }
 }
 
@@ -149,7 +259,6 @@ struct MessageBubble: View {
                 }
             }
             .padding(12)
-            .frame(maxWidth: 720, alignment: frameAlignment)
             .background(bubbleBackground, in: RoundedRectangle(cornerRadius: 10))
 
             if line.role != "user" {

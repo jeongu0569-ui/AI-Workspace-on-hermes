@@ -354,6 +354,13 @@ async function handleHermesProxy(req, res, url) {
       await hermesJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`)
     ));
   }
+  const sessionMatch = url.pathname.match(/^\/api\/hermes\/sessions\/([^/]+)$/);
+  if (sessionMatch && req.method === "DELETE") {
+    const sessionId = decodeURIComponent(sessionMatch[1]);
+    return sendJson(res, await hermesJson(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE"
+    }));
+  }
   if (url.pathname === "/api/hermes/sessions" && req.method === "POST") {
     const body = await readJsonBody(req);
     return sendJson(res, await hermesJson("/api/sessions", {
@@ -381,7 +388,7 @@ function normalizeHermesSessionsResponse(value) {
     const explicitTitle = stringField(item.display_name, item.displayName, item.title, item.name, item.summary);
     const title = explicitTitle || preview
       || fallbackSessionTitle(item.model, id);
-    if (messageCount <= 0 && !preview && !explicitTitle) continue;
+    if (messageCount <= 0) continue;
     seen.add(id);
     sessions.push({
       id,

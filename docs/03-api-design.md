@@ -229,7 +229,7 @@ GET {HERMES_SERVER_URL}/api/sessions?limit=200
 
 Hermes may return raw session rows where `title` is empty and the generated
 session id is the only stable value. The Workspace Server filters archived or
-empty orphan sessions and returns a compact shape:
+empty zero-message sessions and returns a compact shape:
 
 ```json
 {
@@ -283,6 +283,19 @@ Response:
 
 The Apple client uses this endpoint before `session.resume` so selecting an
 existing session shows its previous user/assistant messages immediately.
+
+### `DELETE /api/hermes/sessions/:id`
+
+Deletes a Hermes session through the dashboard API.
+
+Current target:
+
+```text
+DELETE {HERMES_SERVER_URL}/api/sessions/:id
+```
+
+The Apple client disables deletion for the currently active live session and
+shows a confirmation dialog before calling this endpoint.
 
 ### `POST /api/hermes/sessions`
 

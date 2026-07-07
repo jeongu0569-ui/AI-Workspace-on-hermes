@@ -96,6 +96,12 @@ struct WorkspaceAPI {
         return response.messages
     }
 
+    func deleteHermesSession(sessionId: String) async throws {
+        var components = try components("/api/hermes/sessions/\(sessionId)")
+        components.percentEncodedPath = "/api/hermes/sessions/\(sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId)"
+        let _: EmptyResponse = try await request(components, method: "DELETE")
+    }
+
     private func get<T: Decodable>(_ path: String) async throws -> T {
         try await request(try components(path))
     }
