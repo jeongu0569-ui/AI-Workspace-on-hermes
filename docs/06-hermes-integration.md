@@ -31,6 +31,32 @@ message.complete
 turn.complete
 ```
 
+## Implemented Workspace Live Bridge
+
+The Workspace Server now exposes:
+
+```text
+WS /api/live
+```
+
+The client sends JSON commands such as:
+
+```text
+connect
+session.create
+session.resume
+prompt.submit
+approval.respond
+config.accessMode
+```
+
+The server logs in to the Hermes dashboard with the configured username and
+password, requests `/api/auth/ws-ticket`, opens Hermes `/api/ws`, and forwards
+Hermes events back to the app as `hermes.event` messages.
+
+The bridge keeps the client app from needing to know Hermes dashboard cookies or
+WebSocket tickets.
+
 ## Why Workspace Server Should Bridge Hermes
 
 The client could connect directly to Hermes, but a server bridge is better:
@@ -52,8 +78,8 @@ GET /api/sessions
 POST /api/sessions
 ```
 
-But live chat should use WebSocket when available because REST fallback may not
-show full reasoning/tool/approval activity.
+But live chat should use `/api/live` when available because REST fallback may
+not show full reasoning/tool/approval activity.
 
 ## Context Metadata Shape
 
@@ -96,4 +122,3 @@ Search hint:
 - code projects
 
 Hermes should use MCP/docsearch for broad questions.
-

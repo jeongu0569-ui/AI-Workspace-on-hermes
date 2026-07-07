@@ -127,9 +127,9 @@ Creates a Hermes session through the REST endpoint when available.
 Live WebSocket session creation will be added separately because it needs a
 stateful `/api/ws` bridge.
 
-## Future Live API
+## Live API
 
-The client should eventually connect to:
+The client can connect to:
 
 ```text
 WS /api/live
@@ -151,3 +151,66 @@ Client-friendly messages should stay close to Hermes event names:
 { "type": "approval.request", "sessionId": "...", "approvalId": "..." }
 ```
 
+### Client Commands
+
+Client-to-server WebSocket messages are JSON:
+
+```json
+{ "id": "1", "command": "connect" }
+```
+
+Create a Hermes session:
+
+```json
+{
+  "id": "2",
+  "command": "session.create",
+  "params": {
+    "provider": "google-antigravity",
+    "model": "claude-opus-4-6",
+    "reasoningEffort": "medium",
+    "accessMode": "confirm"
+  }
+}
+```
+
+Submit a prompt:
+
+```json
+{
+  "id": "3",
+  "command": "prompt.submit",
+  "params": {
+    "sessionId": "20260707_...",
+    "message": "이 노트 요약해줘",
+    "context": {
+      "workspace": {
+        "scopeType": "note",
+        "scopePath": "Notes/Work/a.md"
+      }
+    }
+  }
+}
+```
+
+Respond to an approval:
+
+```json
+{
+  "id": "4",
+  "command": "approval.respond",
+  "params": {
+    "sessionId": "20260707_...",
+    "approved": true
+  }
+}
+```
+
+Server responses use:
+
+```json
+{ "kind": "ready", "service": "ai-workspace-live" }
+{ "kind": "result", "id": "3", "result": { "ok": true } }
+{ "kind": "hermes.event", "type": "message.delta", "text": "..." }
+{ "kind": "error", "id": "3", "error": "..." }
+```

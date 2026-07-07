@@ -40,6 +40,7 @@ This repository currently contains the first server-side scaffold:
 - markdown/text file read and write API
 - file/folder create, move, and delete API
 - basic Hermes model/session proxy endpoints
+- live Hermes WebSocket bridge at `WS /api/live`
 - architecture, API, data model, and roadmap docs
 
 The UI app will be added after the server API stabilizes.
@@ -86,10 +87,15 @@ DELETE /api/file?path=Notes/example.md
 GET  /api/hermes/models
 GET  /api/hermes/sessions
 POST /api/hermes/sessions
+WS   /api/live
 ```
 
 Client requests use workspace-relative paths only. Absolute paths and `..`
 path traversal are rejected by the server.
+
+The live endpoint accepts JSON commands such as `session.create`,
+`prompt.submit`, and `approval.respond`, then forwards Hermes live events back
+to the client.
 
 ## Documentation
 
@@ -99,4 +105,3 @@ path traversal are rejected by the server.
 - [Data model](docs/04-data-model.md)
 - [MVP roadmap](docs/05-mvp-roadmap.md)
 - [Hermes integration notes](docs/06-hermes-integration.md)
-

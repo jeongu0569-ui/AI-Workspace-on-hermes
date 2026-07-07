@@ -10,6 +10,12 @@ import {
   resolveWorkspacePath,
   rootPathFromKey
 } from "./lib/path-utils.mjs";
+import {
+  HermesLiveClient,
+  acceptWebSocket,
+  createFrameDecoder,
+  encodeWebSocketFrame
+} from "./lib/hermes-live.mjs";
 
 const DEFAULT_PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const DEFAULT_WORKSPACE_ROOT = path.join(process.env.HOME || process.cwd(), "HermesWorkspace");
@@ -24,11 +30,98 @@ const TEXT_FILE_LIMIT = 5 * 1024 * 1024;
 async function main() {
   await ensureWorkspace();
   const server = http.createServer(handleRequest);
+  server.on("upgrade", handleUpgrade);
   server.listen(DEFAULT_PORT, "127.0.0.1", () => {
     console.log(`[workspace] listening on http://127.0.0.1:${DEFAULT_PORT}`);
     console.log(`[workspace] root ${WORKSPACE_ROOT}`);
     console.log(`[workspace] hermes ${HERMES_SERVER_URL}`);
   });
+}
+
+function handleUpgrade(req, socket) {
+  const url = new URL(req.url || "/", "http://localhost");
+  if (url.pathname !== "/api/live") {
+    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  try {
+    acceptWebSocket(req, socket);
+    startLiveBridge(socket);
+  } catch (error) {
+    socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+    socket.destroy(error);
+  }
+}
+
+function startLiveBridge(socket) {
+  const hermes = new HermesLiveClient({
+    hermesServerUrl: HERMES_SERVER_URL,
+    dashboardUsername: HERMES_DASHBOARD_USERNAME,
+    dashboardPassword: HERMES_DASHBOARD_PASSWORD,
+    dashboardProvider: HERMES_DASHBOARD_PROVIDER
+  });
+  let closed = false;
+  const send = (value) => {
+    if (closed || socket.destroyed) return;
+    socket.write(encodeWebSocketFrame(value));
+  };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    hermes.close();
+    try {
+      socket.end();
+    } catch {}
+  };
+  hermes.on("event", (event) => send({ kind: "hermes.event", ...event }));
+  hermes.on("close", () => send({ kind: "hermes.close" }));
+  socket.on("error", close);
+  socket.on("close", close);
+  const decode = createFrameDecoder(async (text) => {
+    let message;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      send({ kind: "error", error: "Client message must be JSON." });
+      return;
+    }
+    try {
+      const result = await handleLiveCommand(hermes, message);
+      send({ kind: "result", id: message.id ?? null, result });
+    } catch (error) {
+      send({ kind: "error", id: message.id ?? null, error: error?.message || "Live command failed." });
+    }
+  }, close);
+  socket.on("data", decode);
+  send({ kind: "ready", service: "ai-workspace-live" });
+}
+
+async function handleLiveCommand(hermes, message) {
+  const command = String(message.command || message.type || "");
+  const params = message.params || {};
+  if (command === "connect") {
+    await hermes.connect();
+    return { ok: true };
+  }
+  if (command === "session.create") {
+    return await hermes.createSession(params);
+  }
+  if (command === "session.resume") {
+    const runtimeSessionId = await hermes.resumeSession(String(params.sessionId || ""));
+    return { ok: true, runtimeSessionId };
+  }
+  if (command === "prompt.submit") {
+    return await hermes.submitPrompt(params);
+  }
+  if (command === "approval.respond") {
+    return await hermes.respondToApproval(params);
+  }
+  if (command === "config.accessMode") {
+    await hermes.setAccessMode(String(params.sessionId || ""), params.accessMode);
+    return { ok: true };
+  }
+  throw Object.assign(new Error(`Unknown live command: ${command}`), { status: 400 });
 }
 
 async function ensureWorkspace() {
@@ -369,4 +462,3 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(1);
   });
 }
-

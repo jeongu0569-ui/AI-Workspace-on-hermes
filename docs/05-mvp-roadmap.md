@@ -28,17 +28,25 @@ Exit criteria:
 
 ## Phase 2: Hermes Live Bridge
 
-Status: next.
+Status: in progress.
 
-- Dashboard username/password login.
-- `/api/auth/ws-ticket` support.
-- Workspace Server `/api/live` WebSocket.
-- Bridge Hermes events:
+- Dashboard username/password login. Done in server bridge.
+- `/api/auth/ws-ticket` support. Done in server bridge.
+- Workspace Server `/api/live` WebSocket. Done as a dependency-free MVP.
+- Bridge Hermes events. Done at raw event level:
   - message
   - thinking/reasoning
   - tools
   - approvals
-- Client-friendly approval response command.
+- Client-friendly approval response command. Done.
+
+Remaining:
+
+- Add a real SwiftUI client consumer.
+- Add integration tests against a running Hermes server when credentials are
+  available.
+- Decide whether production should keep raw Hermes event names or normalize them
+  further.
 
 ## Phase 3: Apple Client MVP
 
@@ -95,4 +103,3 @@ Status: planned.
 - Diff viewer.
 - Approval UI.
 - Git operation visibility.
-
