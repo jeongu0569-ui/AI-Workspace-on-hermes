@@ -171,6 +171,40 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
+    func moveItem(root: String, item: WorkspaceItem, destinationFolder: String) async {
+        guard let api else { return }
+        let destination = workspacePath(in: root, folder: destinationFolder, name: item.name)
+        guard destination != item.path else { return }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            try await api.movePath(from: item.path, to: destination)
+            clearSelectionIfNeeded(paths: [item.path])
+            await loadTree(root: root, path: currentPath(for: root))
+            statusMessage = "Moved \(item.name)"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func copyItem(root: String, item: WorkspaceItem, destinationFolder: String) async {
+        guard let api else { return }
+        let destination = workspacePath(in: root, folder: destinationFolder, name: item.name)
+        guard destination != item.path else {
+            statusMessage = "Choose a different destination"
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            try await api.copyPath(from: item.path, to: destination)
+            await loadTree(root: root, path: currentPath(for: root))
+            statusMessage = "Copied \(item.name)"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
     func deleteItem(root: String, item: WorkspaceItem) async {
         guard let api else { return }
         isLoading = true
@@ -305,6 +339,24 @@ final class WorkspaceStore: ObservableObject {
     private func siblingWorkspacePath(for path: String, newName: String) -> String {
         guard let slashIndex = path.lastIndex(of: "/") else { return newName }
         return "\(path[..<slashIndex])/\(newName)"
+    }
+
+    private func workspacePath(in root: String, folder: String, name: String) -> String {
+        let base = workspaceRootFolderName(for: root)
+        let cleanFolder = normalizeNestedFolder(folder)
+        if cleanFolder.isEmpty {
+            return "\(base)/\(name)"
+        }
+        return "\(base)/\(cleanFolder)/\(name)"
+    }
+
+    private func normalizeNestedFolder(_ folder: String) -> String {
+        folder
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+            .split(separator: "/")
+            .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
+            .joined(separator: "/")
     }
 
     private func clearSelectionIfNeeded(paths: [String]) {

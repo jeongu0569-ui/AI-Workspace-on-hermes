@@ -220,6 +220,8 @@ touching local client storage directly:
 ```text
 New file   -> POST /api/file
 New folder -> POST /api/folder
+Move       -> PATCH /api/file/move
+Copy       -> POST /api/file/copy
 Rename     -> PATCH /api/file/move
 Delete     -> DELETE /api/file
 Save edit  -> PUT /api/file
@@ -230,6 +232,12 @@ remote workspace use. On iOS, the app is not expected to mount NAS folders,
 spawn local file tools, or modify the server disk directly. It only sends
 workspace-relative paths to the Workspace Server, and the server performs the
 actual filesystem operation inside the configured workspace root.
+
+The current Apple UI exposes move/copy through context-menu actions with a
+destination folder text field. This is intentionally server-relative and works
+on iOS as well as macOS. A later drag-and-drop pass should reuse the same
+`WorkspaceStore.moveItem` and `WorkspaceStore.copyItem` methods instead of
+adding a second filesystem path layer.
 
 While an activity block is streaming, its collapsed state shows a three-line
 preview of the latest reasoning/tool text and a subtle shimmer. When streaming

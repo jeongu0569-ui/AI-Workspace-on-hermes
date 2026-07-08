@@ -35,6 +35,8 @@ struct FileBrowserPane: View {
     @State private var itemToRename: WorkspaceItem?
     @State private var renameName = ""
     @State private var itemToDelete: WorkspaceItem?
+    @State private var transferAction: WorkspaceTransferAction?
+    @State private var transferDestination = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -123,6 +125,20 @@ struct FileBrowserPane: View {
                 .buttonStyle(.plain)
                 .contextMenu {
                     Button {
+                        transferDestination = store.currentPath(for: root)
+                        transferAction = .move(item)
+                    } label: {
+                        Label("Move to folder", systemImage: "folder")
+                    }
+
+                    Button {
+                        transferDestination = store.currentPath(for: root)
+                        transferAction = .copy(item)
+                    } label: {
+                        Label("Copy to folder", systemImage: "doc.on.doc")
+                    }
+
+                    Button {
                         itemToRename = item
                         renameName = item.name
                     } label: {
@@ -192,6 +208,29 @@ struct FileBrowserPane: View {
         } message: {
             Text(itemToRename?.path ?? "")
         }
+        .alert(transferAction?.title ?? "Transfer", isPresented: transferBinding) {
+            TextField("Destination folder in \(title)", text: $transferDestination)
+            Button(transferAction?.buttonTitle ?? "Apply") {
+                let action = transferAction
+                let destination = transferDestination
+                transferAction = nil
+                Task {
+                    switch action {
+                    case let .move(item):
+                        await store.moveItem(root: root, item: item, destinationFolder: destination)
+                    case let .copy(item):
+                        await store.copyItem(root: root, item: item, destinationFolder: destination)
+                    case .none:
+                        break
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                transferAction = nil
+            }
+        } message: {
+            Text("Use a folder path relative to \(title). Leave empty for the \(title) root.")
+        }
         .confirmationDialog("Delete item?", isPresented: deleteBinding, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 let item = itemToDelete
@@ -231,6 +270,13 @@ struct FileBrowserPane: View {
         )
     }
 
+    private var transferBinding: Binding<Bool> {
+        Binding(
+            get: { transferAction != nil },
+            set: { if !$0 { transferAction = nil } }
+        )
+    }
+
     private func icon(for item: WorkspaceItem) -> String {
         if item.isDirectory { return "folder" }
         switch item.kind {
@@ -239,6 +285,25 @@ struct FileBrowserPane: View {
         case "image": return "photo"
         case "code": return "curlybraces"
         default: return "doc"
+        }
+    }
+}
+
+private enum WorkspaceTransferAction {
+    case move(WorkspaceItem)
+    case copy(WorkspaceItem)
+
+    var title: String {
+        switch self {
+        case let .move(item): "Move \(item.name)"
+        case let .copy(item): "Copy \(item.name)"
+        }
+    }
+
+    var buttonTitle: String {
+        switch self {
+        case .move: "Move"
+        case .copy: "Copy"
         }
     }
 }

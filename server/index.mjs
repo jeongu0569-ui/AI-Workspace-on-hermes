@@ -194,6 +194,9 @@ async function handleRequest(req, res) {
     if (req.method === "PATCH" && url.pathname === "/api/file/move") {
       return sendJson(res, await movePath(req));
     }
+    if (req.method === "POST" && url.pathname === "/api/file/copy") {
+      return sendJson(res, await copyPath(req), 201);
+    }
     if (req.method === "DELETE" && url.pathname === "/api/file") {
       return sendJson(res, await deletePath(url));
     }
@@ -325,6 +328,20 @@ async function movePath(req) {
   const to = resolveWorkspacePath(WORKSPACE_ROOT, body.to);
   await fs.mkdir(path.dirname(to.absolutePath), { recursive: true });
   await fs.rename(from.absolutePath, to.absolutePath);
+  return { ok: true, from: from.relativePath, to: to.relativePath };
+}
+
+async function copyPath(req) {
+  const body = await readJsonBody(req);
+  if (!body.from || !body.to) throw Object.assign(new Error("Missing from or to path."), { status: 400 });
+  const from = resolveWorkspacePath(WORKSPACE_ROOT, body.from);
+  const to = resolveWorkspacePath(WORKSPACE_ROOT, body.to);
+  await fs.mkdir(path.dirname(to.absolutePath), { recursive: true });
+  await fs.cp(from.absolutePath, to.absolutePath, {
+    recursive: true,
+    errorOnExist: true,
+    force: false
+  });
   return { ok: true, from: from.relativePath, to: to.relativePath };
 }
 

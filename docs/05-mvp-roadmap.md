@@ -61,6 +61,7 @@ Status: in progress.
 - Notes file tree. Recursive Notes and Code folder navigation done in the macOS client.
 - Notes/Code create actions. The Apple client can create a file or folder in the current server-managed folder through `POST /api/file` and `POST /api/folder`.
 - Notes/Code rename/delete actions. The Apple client can rename via `PATCH /api/file/move` and delete via `DELETE /api/file`, with the server performing the filesystem operation inside the workspace root.
+- Notes/Code move/copy actions. The Apple client can move via `PATCH /api/file/move` and copy via `POST /api/file/copy` with destination folders expressed relative to the selected Notes/Code root.
 - Markdown editor. Basic text/markdown/code editing and save done in the macOS client.
 - Markdown/code read mode. Chat, Notes markdown previews, and Code file previews now share the same SwiftUI rendering layer. Markdown renders headings, paragraphs, unordered and ordered lists, task checkboxes, quotes, horizontal rules, tables, and fenced code cards. Code previews infer language from the file extension and use language-specific keyword profiles across common app and systems languages.
 - PDF viewer through server raw file endpoint. Basic macOS PDFKit rendering and image raw preview done.
@@ -75,7 +76,7 @@ Remaining:
 - Notes should default to read mode and only show raw Markdown in edit mode. The current implementation has this basic split, but still needs richer Markdown features such as images, wiki links/backlinks, embedded attachments, callouts, and bidirectional note references.
 - PDF should evolve from basic PDFKit viewing to a GoodNotes-like surface: read mode, annotation mode, PencilKit drawing, per-page annotation persistence, thumbnails, search, and fullscreen reading/writing modes.
 - Code should evolve from source preview to VS Code-like project work: editor tabs, file create/move/delete, terminal panel, and Hermes tool/activity side panel. Terminal support must be designed as a server-side terminal bridge. macOS may later expose local-development conveniences, but iOS/iPadOS cannot spawn a local shell and should only control terminal sessions running on the Workspace/Hermes server.
-- File operations should expand from create/rename/delete UI to full move, copy, drag-and-drop, trash/undo, and conflict resolution.
+- File operations should expand from menu-based create/rename/move/copy/delete to drag-and-drop, trash/undo, and conflict resolution.
 - Add a global right AI panel for Notes and Code views. The full Chat tab remains the primary chat surface, but non-chat sections should be able to open a compact Hermes panel with current file/folder context.
 
 ## Phase 4: Notes Context Router
