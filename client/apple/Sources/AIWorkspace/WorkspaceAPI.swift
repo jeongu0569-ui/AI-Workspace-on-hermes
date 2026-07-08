@@ -69,6 +69,19 @@ struct WorkspaceAPI {
         let _: EmptyResponse = try await request(components, method: "PUT", body: body)
     }
 
+    func createFile(path: String, content: String = "") async throws {
+        let body = [
+            "path": path,
+            "content": content
+        ]
+        let _: EmptyResponse = try await post("/api/file", body: body)
+    }
+
+    func createFolder(path: String) async throws {
+        let body = ["path": path]
+        let _: EmptyResponse = try await post("/api/folder", body: body)
+    }
+
     func search(query: String, scopePath: String) async throws -> SearchResponse {
         let body = [
             "query": query,

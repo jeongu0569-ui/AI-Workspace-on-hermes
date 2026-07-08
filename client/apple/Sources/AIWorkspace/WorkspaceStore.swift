@@ -105,6 +105,48 @@ final class WorkspaceStore: ObservableObject {
         await loadTree(root: root, path: parent)
     }
 
+    func createFolder(root: String, name: String) async {
+        guard let api else { return }
+        let cleaned = cleanNewItemName(name)
+        guard !cleaned.isEmpty else {
+            statusMessage = "Folder name is required"
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let path = workspacePathForNewItem(root: root, name: cleaned)
+            try await api.createFolder(path: path)
+            await loadTree(root: root, path: currentPath(for: root))
+            statusMessage = "Created folder \(cleaned)"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func createFile(root: String, name: String) async {
+        guard let api else { return }
+        let cleaned = cleanNewItemName(name)
+        guard !cleaned.isEmpty else {
+            statusMessage = "File name is required"
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let finalName = defaultExtensionName(cleaned, root: root)
+            let path = workspacePathForNewItem(root: root, name: finalName)
+            try await api.createFile(path: path, content: defaultFileContent(for: finalName))
+            await loadTree(root: root, path: currentPath(for: root))
+            if let item = items(for: root).first(where: { $0.path == path }) {
+                await loadFile(item)
+            }
+            statusMessage = "Created file \(finalName)"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
     func loadFile(_ item: WorkspaceItem) async {
         guard !item.isDirectory, let api else { return }
         isLoading = true
@@ -185,6 +227,41 @@ final class WorkspaceStore: ObservableObject {
         } catch {
             statusMessage = error.localizedDescription
         }
+    }
+
+    private func workspacePathForNewItem(root: String, name: String) -> String {
+        let base = workspaceRootFolderName(for: root)
+        let current = currentPath(for: root)
+        let nested = current.isEmpty ? name : "\(current)/\(name)"
+        return "\(base)/\(nested)"
+    }
+
+    private func workspaceRootFolderName(for root: String) -> String {
+        root == "code" ? "Code" : "Notes"
+    }
+
+    private func cleanNewItemName(_ name: String) -> String {
+        name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+            .split(separator: "/")
+            .map(String.init)
+            .last?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private func defaultExtensionName(_ name: String, root: String) -> String {
+        guard URL(fileURLWithPath: name).pathExtension.isEmpty else { return name }
+        return root == "code" ? "\(name).swift" : "\(name).md"
+    }
+
+    private func defaultFileContent(for name: String) -> String {
+        let ext = URL(fileURLWithPath: name).pathExtension.lowercased()
+        if ext == "md" || ext == "markdown" {
+            let title = URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent
+            return "# \(title)\n"
+        }
+        return ""
     }
 
     func runSearch(query: String, scopePath: String) async {

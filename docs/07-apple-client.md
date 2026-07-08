@@ -79,6 +79,9 @@ Implemented:
   Markdown tables are rendered as distinct UI blocks instead of one flat line
 - the same Markdown/code renderer is now used by Notes and Code file previews,
   so chat answers, markdown notes, and source files share one rendering surface
+- Notes and Code file browsers can create a new file or folder in the current
+  server-managed folder. New Notes files default to `.md`; new Code files
+  default to `.swift` unless the user enters an extension.
 - approval and denial buttons for `approval.request` events
 - normalized Hermes session menu titles instead of raw generated session ids
 - zero-message Hermes sessions are hidden from the client session list
@@ -191,6 +194,18 @@ Code file     -> CodeBlockView(language from extension)
 Other text    -> plain monospaced text
 ```
 
+The Notes and Code browser panes call the Workspace Server file APIs instead of
+touching local client storage directly:
+
+```text
+New file   -> POST /api/file
+New folder -> POST /api/folder
+Save edit  -> PUT /api/file
+```
+
+This keeps file ownership on the server, which is required for iOS/iPadOS and
+remote workspace use.
+
 While an activity block is streaming, its collapsed state shows a three-line
 preview of the latest reasoning/tool text and a subtle shimmer. When streaming
 finishes, the shimmer stops and the collapsed row returns to the summary-only
@@ -269,6 +284,20 @@ For example:
 - macOS uses `HSplitView`; iOS uses a stacked layout.
 - macOS PDF preview uses `NSViewRepresentable`; iOS uses `UIViewRepresentable`.
 - macOS applies `.windowStyle(.titleBar)` and activation handling; iOS does not.
+
+Terminal support must be designed as a remote server feature, not as a
+client-local shell. iOS/iPadOS cannot spawn a local development terminal, so the
+cross-platform terminal panel should control terminal sessions running on the
+Workspace Server or Hermes server:
+
+```text
+iOS/macOS terminal panel
+  -> Workspace Server terminal API/WebSocket
+  -> server-side shell or Hermes tool session
+```
+
+macOS may later add local-only developer conveniences, but those should be
+separate from the shared iOS/macOS terminal feature.
 
 Info plists:
 

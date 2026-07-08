@@ -30,11 +30,33 @@ struct FileBrowserPane: View {
     @EnvironmentObject private var store: WorkspaceStore
     let title: String
     let root: String
+    @State private var newItemKind: NewWorkspaceItemKind?
+    @State private var newItemName = ""
 
     var body: some View {
         VStack(spacing: 0) {
             HeaderView(title: title, subtitle: store.sectionSubtitle(root: root))
             HStack(spacing: 12) {
+                Menu {
+                    Button {
+                        newItemName = root == "code" ? "Untitled.swift" : "Untitled.md"
+                        newItemKind = .file
+                    } label: {
+                        Label("New file", systemImage: "doc.badge.plus")
+                    }
+
+                    Button {
+                        newItemName = "New Folder"
+                        newItemKind = .folder
+                    } label: {
+                        Label("New folder", systemImage: "folder.badge.plus")
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .help("Create file or folder")
+
                 Button {
                     Task { await store.goToParent(root: root) }
                 } label: {
@@ -98,6 +120,36 @@ struct FileBrowserPane: View {
                 .buttonStyle(.plain)
             }
         }
+        .alert(newItemKind?.title ?? "New item", isPresented: newItemBinding) {
+            TextField("Name", text: $newItemName)
+            Button("Create") {
+                let name = newItemName
+                let kind = newItemKind
+                newItemKind = nil
+                Task {
+                    switch kind {
+                    case .file:
+                        await store.createFile(root: root, name: name)
+                    case .folder:
+                        await store.createFolder(root: root, name: name)
+                    case .none:
+                        break
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                newItemKind = nil
+            }
+        } message: {
+            Text(store.currentPath(for: root).isEmpty ? "Create in \(title)." : "Create in \(store.currentPath(for: root)).")
+        }
+    }
+
+    private var newItemBinding: Binding<Bool> {
+        Binding(
+            get: { newItemKind != nil },
+            set: { if !$0 { newItemKind = nil } }
+        )
     }
 
     private func icon(for item: WorkspaceItem) -> String {
@@ -108,6 +160,18 @@ struct FileBrowserPane: View {
         case "image": return "photo"
         case "code": return "curlybraces"
         default: return "doc"
+        }
+    }
+}
+
+private enum NewWorkspaceItemKind {
+    case file
+    case folder
+
+    var title: String {
+        switch self {
+        case .file: "New file"
+        case .folder: "New folder"
         }
     }
 }
