@@ -75,10 +75,16 @@ Implemented:
 - active activity shimmer while Hermes is still streaming; finished rows show
   `Done` and stop animating
 - Markdown rendering for assistant answers with a SwiftUI block renderer ported
-  from the Obsidian/Hermes approach: headings, bullets, fenced code blocks, and
-  Markdown tables are rendered as distinct UI blocks instead of one flat line
+  from the Obsidian/Hermes approach: headings, paragraphs, unordered lists,
+  ordered lists, task checkboxes, block quotes, horizontal rules, fenced code
+  blocks, and Markdown tables are rendered as distinct UI blocks instead of
+  one flat line
 - the same Markdown/code renderer is now used by Notes and Code file previews,
   so chat answers, markdown notes, and source files share one rendering surface
+- code highlighting is language-aware in the current native renderer. It
+  normalizes common aliases and has profiles for Python, C/C++, Java/Kotlin/C#,
+  JavaScript/TypeScript, Swift, Rust, Go, shell/Dockerfile/Makefile, SQL,
+  JSON/YAML, HTML/XML, CSS, Ruby, PHP, Markdown, and fallback code.
 - Notes and Code file browsers can create a new file or folder in the current
   server-managed folder. New Notes files default to `.md`; new Code files
   default to `.swift` unless the user enters an extension.
@@ -166,25 +172,39 @@ User messages are right-aligned and assistant messages remain left-aligned, so
 chat turns are visually easier to scan.
 
 Assistant answers are rendered by a small SwiftUI Markdown block renderer. The
-renderer follows the same broad approach as the Obsidian plugin and Hermes TUI:
-split the text into blocks first, then render headings, bullets, fenced code
-blocks, and table rows with dedicated views. Inline emphasis/code is still
-handled through Swift `AttributedString(markdown:)` inside each text cell.
+renderer follows the same broad approach as the Obsidian plugin and Hermes UI:
+split the text into blocks first, then render headings, paragraphs, lists,
+tasks, quotes, rules, fenced code blocks, and table rows with dedicated views.
+Inline emphasis/code is still handled through Swift
+`AttributedString(markdown:)` inside each text cell.
 
 Fenced code blocks preserve the language tag from Markdown fences such as
-```` ```python ```` and render a compact `Code · python` header. The code body
-uses a lightweight local highlighter for comments, strings, numbers, literals,
-and language-specific keyword sets. The current built-in profiles cover Python,
-C/C++, Java/Kotlin, JavaScript/TypeScript, Swift, Rust, Go, shell, SQL, JSON,
-YAML, and a generic fallback. The code card also includes an inline copy button,
-mirroring the Hermes Desktop code-card pattern. Markdown tables render in a
-bordered, horizontally scrollable table view with styled header cells.
+```` ```python ```` and render a compact `Code · Python` header. Code previews
+infer the language from the file extension and use the same code card. The code
+body uses a lightweight local highlighter for comments, strings, numbers,
+literals, and language-specific keyword sets. The current built-in profiles
+cover Python, C/C++, Java/Kotlin/C#, JavaScript/TypeScript, Swift, Rust, Go,
+shell/Dockerfile/Makefile, SQL, JSON/YAML, HTML/XML, CSS, Ruby, PHP, Markdown,
+and fallback code. The code card also includes an inline copy button, mirroring
+the Hermes Desktop code-card pattern. Markdown tables render in a bordered,
+horizontally scrollable table view with styled header cells.
 
-Hermes Desktop uses React Streamdown plus Shiki for full syntax highlighting.
-The Apple app does not yet embed Shiki or Tree-sitter. The renderer is structured
-so a future `CodeEditSourceEditor`, Tree-sitter, or Swift syntax-highlighting
-package can replace the built-in highlighter without changing chat, Notes, and
-Code preview call sites.
+Hermes Desktop/Web uses a web rendering stack with Markdown components and
+Shiki/Streamdown dependencies available in the Hermes source tree. The Hermes
+TUI has a separate terminal-specific renderer. Neither can be copied directly
+into SwiftUI without a WebView bridge and bundled JavaScript resources. The
+target architecture for Hermes-level rendering quality is:
+
+```text
+RichMarkdownView / CodeBlockView
+  -> native renderer for fast fallback and editable previews
+  -> WebView renderer for full Markdown + Shiki/TextMate-grade code color
+```
+
+The current renderer is intentionally structured so a future WebView/Shiki,
+`CodeEditSourceEditor`, Tree-sitter, or Swift syntax-highlighting package can
+replace the built-in highlighter without changing chat, Notes, and Code preview
+call sites.
 
 Notes and Code previews use the same rendering layer:
 

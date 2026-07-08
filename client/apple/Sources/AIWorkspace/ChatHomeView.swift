@@ -503,6 +503,41 @@ struct RichMarkdownView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        case let .ordered(index, text):
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text("\(index).")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 22, alignment: .trailing)
+                Text(attributed(text))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case let .task(checked, text):
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Image(systemName: checked ? "checkmark.square.fill" : "square")
+                    .font(.caption)
+                    .foregroundStyle(checked ? .green : .secondary)
+                Text(attributed(text))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case let .quote(text):
+            Text(attributed(text))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(.secondary.opacity(0.38))
+                        .frame(width: 3)
+                }
+                .foregroundStyle(.secondary)
+        case .horizontalRule:
+            Rectangle()
+                .fill(.quaternary.opacity(0.75))
+                .frame(height: 1)
+                .padding(.vertical, 4)
         case let .code(language, text):
             CodeBlockView(language: language, code: text)
         case let .table(table):
@@ -551,12 +586,14 @@ struct CodeBlockView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 7) {
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                Text("<|>")
+                    .font(.caption2.weight(.bold).monospaced())
                     .foregroundStyle(.secondary)
                 Text("Code")
                     .font(.caption.weight(.semibold))
-                if let language, !language.isEmpty {
-                    Text("· \(language)")
+                let displayLanguage = displayLanguageName(language)
+                if !displayLanguage.isEmpty {
+                    Text("· \(displayLanguage)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -729,7 +766,9 @@ private func highlightedCode(_ code: String, language: String?) -> AttributedStr
                 index += 1
             }
             let token = String(scalars[start..<index])
-            if profile.keywords.contains(token) || profile.keywords.contains(token.uppercased()) {
+            if profile.keywords.contains(token)
+                || profile.keywords.contains(token.lowercased())
+                || profile.keywords.contains(token.uppercased()) {
                 append(token, color: .purple)
             } else if profile.literals.contains(token) || profile.literals.contains(token.lowercased()) {
                 append(token, color: .blue)
@@ -753,12 +792,78 @@ private struct CodeHighlightProfile {
     let supportsBlockComments: Bool
 }
 
+private func normalizedLanguage(_ language: String?) -> String {
+    let raw = (language ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    let aliases: [String: String] = [
+        "py": "python",
+        "pyw": "python",
+        "js": "javascript",
+        "mjs": "javascript",
+        "cjs": "javascript",
+        "jsx": "javascript",
+        "ts": "typescript",
+        "tsx": "typescript",
+        "c++": "cpp",
+        "cc": "cpp",
+        "cxx": "cpp",
+        "hpp": "cpp",
+        "hh": "cpp",
+        "hxx": "cpp",
+        "cs": "csharp",
+        "kt": "kotlin",
+        "kts": "kotlin",
+        "rs": "rust",
+        "rb": "ruby",
+        "sh": "bash",
+        "zsh": "bash",
+        "shell": "bash",
+        "yml": "yaml",
+        "htm": "html",
+        "md": "markdown",
+        "docker": "dockerfile",
+        "make": "makefile",
+        "mk": "makefile"
+    ]
+    return aliases[raw] ?? raw
+}
+
+private func displayLanguageName(_ language: String?) -> String {
+    let normalized = normalizedLanguage(language)
+    let names: [String: String] = [
+        "": "",
+        "bash": "Shell",
+        "c": "C",
+        "cpp": "C++",
+        "csharp": "C#",
+        "css": "CSS",
+        "dockerfile": "Dockerfile",
+        "go": "Go",
+        "html": "HTML",
+        "java": "Java",
+        "javascript": "JavaScript",
+        "json": "JSON",
+        "kotlin": "Kotlin",
+        "makefile": "Makefile",
+        "markdown": "Markdown",
+        "php": "PHP",
+        "python": "Python",
+        "ruby": "Ruby",
+        "rust": "Rust",
+        "sql": "SQL",
+        "swift": "Swift",
+        "typescript": "TypeScript",
+        "xml": "XML",
+        "yaml": "YAML"
+    ]
+    return names[normalized] ?? normalized
+}
+
 private func codeHighlightProfile(for language: String?) -> CodeHighlightProfile {
-    let normalized = language?.lowercased() ?? ""
+    let normalized = normalizedLanguage(language)
     let commonLiterals: Set<String> = ["true", "false", "null", "nil", "none", "True", "False", "None"]
 
     switch normalized {
-    case "python", "py":
+    case "python":
         return CodeHighlightProfile(keywords: [
             "and", "as", "assert", "async", "await", "break", "class", "continue",
             "def", "del", "elif", "else", "except", "False", "finally", "for",
@@ -766,7 +871,7 @@ private func codeHighlightProfile(for language: String?) -> CodeHighlightProfile
             "nonlocal", "not", "or", "pass", "raise", "return", "True", "try",
             "while", "with", "yield"
         ], literals: commonLiterals, lineCommentPrefixes: ["#"], supportsBlockComments: false)
-    case "c", "cpp", "c++", "cc", "cxx", "objc", "objective-c":
+    case "c", "cpp", "objc", "objective-c":
         return CodeHighlightProfile(keywords: [
             "auto", "bool", "break", "case", "char", "class", "const", "constexpr",
             "continue", "default", "delete", "do", "double", "else", "enum",
@@ -776,7 +881,7 @@ private func codeHighlightProfile(for language: String?) -> CodeHighlightProfile
             "template", "this", "throw", "try", "typedef", "typename", "union",
             "unsigned", "using", "virtual", "void", "volatile", "while"
         ], literals: commonLiterals, lineCommentPrefixes: ["//", "#"], supportsBlockComments: true)
-    case "java", "kotlin":
+    case "java", "kotlin", "csharp":
         return CodeHighlightProfile(keywords: [
             "abstract", "break", "case", "catch", "class", "const", "continue",
             "default", "do", "else", "enum", "extends", "final", "finally", "for",
@@ -785,7 +890,7 @@ private func codeHighlightProfile(for language: String?) -> CodeHighlightProfile
             "static", "super", "switch", "this", "throw", "throws", "try", "val",
             "var", "void", "when", "while"
         ], literals: commonLiterals, lineCommentPrefixes: ["//"], supportsBlockComments: true)
-    case "javascript", "typescript", "js", "ts", "jsx", "tsx":
+    case "javascript", "typescript":
         return CodeHighlightProfile(keywords: [
             "async", "await", "break", "case", "catch", "class", "const", "continue",
             "debugger", "default", "delete", "do", "else", "export", "extends",
@@ -804,7 +909,7 @@ private func codeHighlightProfile(for language: String?) -> CodeHighlightProfile
             "self", "static", "struct", "subscript", "super", "switch", "throw",
             "throws", "true", "try", "typealias", "var", "where", "while"
         ], literals: commonLiterals, lineCommentPrefixes: ["//"], supportsBlockComments: true)
-    case "rust", "rs":
+    case "rust":
         return CodeHighlightProfile(keywords: [
             "as", "async", "await", "break", "const", "continue", "crate", "dyn",
             "else", "enum", "extern", "fn", "for", "if", "impl", "in", "let",
@@ -819,11 +924,12 @@ private func codeHighlightProfile(for language: String?) -> CodeHighlightProfile
             "interface", "map", "package", "range", "return", "select", "struct",
             "switch", "type", "var"
         ], literals: commonLiterals, lineCommentPrefixes: ["//"], supportsBlockComments: true)
-    case "bash", "sh", "zsh", "shell":
+    case "bash", "makefile", "dockerfile":
         return CodeHighlightProfile(keywords: [
             "case", "do", "done", "elif", "else", "esac", "fi", "for", "function",
             "if", "in", "select", "then", "until", "while", "export", "local",
-            "readonly", "return", "source"
+            "readonly", "return", "source", "from", "run", "copy", "add", "cmd",
+            "entrypoint", "env", "arg", "workdir", "expose", "volume", "user"
         ], literals: commonLiterals, lineCommentPrefixes: ["#"], supportsBlockComments: false)
     case "sql":
         return CodeHighlightProfile(keywords: [
@@ -832,8 +938,42 @@ private func codeHighlightProfile(for language: String?) -> CodeHighlightProfile
             "INTO", "JOIN", "LEFT", "LIKE", "LIMIT", "NOT", "NULL", "ON", "OR",
             "ORDER", "RIGHT", "SELECT", "SET", "TABLE", "UPDATE", "VALUES", "WHERE"
         ], literals: commonLiterals, lineCommentPrefixes: ["--"], supportsBlockComments: true)
-    case "json", "yaml", "yml":
+    case "json", "yaml":
         return CodeHighlightProfile(keywords: [], literals: commonLiterals, lineCommentPrefixes: ["#"], supportsBlockComments: false)
+    case "html", "xml":
+        return CodeHighlightProfile(keywords: [
+            "html", "head", "body", "div", "span", "section", "article", "header",
+            "footer", "main", "script", "style", "link", "meta", "class", "id",
+            "src", "href", "type", "name", "content", "template", "button", "input",
+            "form", "table", "thead", "tbody", "tr", "td", "th"
+        ], literals: commonLiterals, lineCommentPrefixes: [], supportsBlockComments: true)
+    case "css":
+        return CodeHighlightProfile(keywords: [
+            "align-items", "animation", "background", "border", "color", "display",
+            "flex", "font", "gap", "grid", "height", "justify-content", "margin",
+            "padding", "position", "relative", "absolute", "width", "z-index",
+            "transform", "transition", "opacity", "content", "media", "keyframes"
+        ], literals: commonLiterals, lineCommentPrefixes: [], supportsBlockComments: true)
+    case "ruby":
+        return CodeHighlightProfile(keywords: [
+            "alias", "and", "begin", "break", "case", "class", "def", "defined?",
+            "do", "else", "elsif", "end", "ensure", "false", "for", "if", "in",
+            "module", "next", "nil", "not", "or", "redo", "rescue", "retry",
+            "return", "self", "super", "then", "true", "undef", "unless", "until",
+            "when", "while", "yield"
+        ], literals: commonLiterals, lineCommentPrefixes: ["#"], supportsBlockComments: false)
+    case "php":
+        return CodeHighlightProfile(keywords: [
+            "abstract", "and", "array", "as", "break", "callable", "case", "catch",
+            "class", "clone", "const", "continue", "declare", "default", "do",
+            "echo", "else", "elseif", "empty", "extends", "final", "finally", "fn",
+            "for", "foreach", "function", "global", "if", "implements", "include",
+            "instanceof", "interface", "namespace", "new", "private", "protected",
+            "public", "require", "return", "static", "switch", "throw", "trait",
+            "try", "use", "var", "while", "yield"
+        ], literals: commonLiterals, lineCommentPrefixes: ["//", "#"], supportsBlockComments: true)
+    case "markdown":
+        return CodeHighlightProfile(keywords: [], literals: commonLiterals, lineCommentPrefixes: [], supportsBlockComments: false)
     default:
         return CodeHighlightProfile(keywords: [
             "async", "await", "break", "case", "catch", "class", "const", "continue",
@@ -917,9 +1057,37 @@ private func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
             continue
         }
 
+        if isHorizontalRule(trimmed) {
+            flushParagraph()
+            blocks.append(.horizontalRule)
+            index += 1
+            continue
+        }
+
         if let heading = parseHeading(trimmed) {
             flushParagraph()
             blocks.append(.heading(level: heading.level, text: heading.text))
+            index += 1
+            continue
+        }
+
+        if let task = parseTask(trimmed) {
+            flushParagraph()
+            blocks.append(.task(checked: task.checked, text: task.text))
+            index += 1
+            continue
+        }
+
+        if let quote = parseQuote(trimmed) {
+            flushParagraph()
+            blocks.append(.quote(quote))
+            index += 1
+            continue
+        }
+
+        if let ordered = parseOrdered(trimmed) {
+            flushParagraph()
+            blocks.append(.ordered(index: ordered.index, text: ordered.text))
             index += 1
             continue
         }
@@ -952,6 +1120,42 @@ private func parseBullet(_ line: String) -> String? {
         return String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
     }
     return nil
+}
+
+private func parseOrdered(_ line: String) -> (index: Int, text: String)? {
+    let pattern = #"^(\d+)[\.\)]\s+(.+)$"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+          let indexRange = Range(match.range(at: 1), in: line),
+          let textRange = Range(match.range(at: 2), in: line),
+          let index = Int(line[indexRange]) else {
+        return nil
+    }
+    return (index, String(line[textRange]).trimmingCharacters(in: .whitespaces))
+}
+
+private func parseTask(_ line: String) -> (checked: Bool, text: String)? {
+    let lower = line.lowercased()
+    for marker in ["- [ ] ", "* [ ] ", "+ [ ] "] where lower.hasPrefix(marker) {
+        return (false, String(line.dropFirst(marker.count)).trimmingCharacters(in: .whitespaces))
+    }
+    for marker in ["- [x] ", "* [x] ", "+ [x] "] where lower.hasPrefix(marker) {
+        return (true, String(line.dropFirst(marker.count)).trimmingCharacters(in: .whitespaces))
+    }
+    return nil
+}
+
+private func parseQuote(_ line: String) -> String? {
+    guard line.hasPrefix(">") else { return nil }
+    return String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+}
+
+private func isHorizontalRule(_ line: String) -> Bool {
+    let stripped = line.replacingOccurrences(of: " ", with: "")
+    guard stripped.count >= 3 else { return false }
+    return stripped.allSatisfy { $0 == "-" }
+        || stripped.allSatisfy { $0 == "*" }
+        || stripped.allSatisfy { $0 == "_" }
 }
 
 private func parseMarkdownTable(lines: [String], start: Int) -> (table: MarkdownTable, nextIndex: Int)? {

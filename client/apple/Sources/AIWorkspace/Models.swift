@@ -101,6 +101,10 @@ enum MarkdownBlock: Identifiable {
     case heading(level: Int, text: String)
     case paragraph(String)
     case bullet(String)
+    case ordered(index: Int, text: String)
+    case task(checked: Bool, text: String)
+    case quote(String)
+    case horizontalRule
     case code(language: String?, text: String)
     case table(MarkdownTable)
 

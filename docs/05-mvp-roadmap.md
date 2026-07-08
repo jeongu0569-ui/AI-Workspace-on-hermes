@@ -61,7 +61,7 @@ Status: in progress.
 - Notes file tree. Recursive Notes and Code folder navigation done in the macOS client.
 - Notes/Code create actions. The Apple client can create a file or folder in the current server-managed folder through `POST /api/file` and `POST /api/folder`.
 - Markdown editor. Basic text/markdown/code editing and save done in the macOS client.
-- Markdown/code read mode. Chat, Notes markdown previews, and Code file previews now share the same SwiftUI rendering layer. Markdown renders headings, bullets, tables, and fenced code cards. Code previews infer language from the file extension and use language-specific keyword profiles.
+- Markdown/code read mode. Chat, Notes markdown previews, and Code file previews now share the same SwiftUI rendering layer. Markdown renders headings, paragraphs, unordered and ordered lists, task checkboxes, quotes, horizontal rules, tables, and fenced code cards. Code previews infer language from the file extension and use language-specific keyword profiles across common app and systems languages.
 - PDF viewer through server raw file endpoint. Basic macOS PDFKit rendering and image raw preview done.
 - Hermes chat view. Live `/api/live` wiring, model picker, session resume menu, context scope picker, and approval controls done in the macOS client.
 - Search view. Done with `POST /api/search`.
@@ -70,8 +70,8 @@ Status: in progress.
 Remaining:
 
 - Full Xcode iOS app target, signing, and device packaging.
-- Replace the built-in lightweight code highlighter with a real Swift syntax stack. Candidate directions: `CodeEditSourceEditor` for Code editing, Tree-sitter-backed highlighting, or a Swift package that can produce attributed code spans.
-- Notes should default to read mode and only show raw Markdown in edit mode. The current implementation has this basic split, but still needs richer Markdown features such as links, images, checkboxes, backlinks, and embedded attachments.
+- Replace the built-in lightweight code highlighter with a real production renderer. Candidate directions: a WebView renderer that bundles Shiki/Markdown JS for Hermes Desktop-grade output, `CodeEditSourceEditor` for Code editing, Tree-sitter-backed highlighting, or a Swift package that can produce attributed code spans.
+- Notes should default to read mode and only show raw Markdown in edit mode. The current implementation has this basic split, but still needs richer Markdown features such as images, wiki links/backlinks, embedded attachments, callouts, and bidirectional note references.
 - PDF should evolve from basic PDFKit viewing to a GoodNotes-like surface: read mode, annotation mode, PencilKit drawing, per-page annotation persistence, thumbnails, search, and fullscreen reading/writing modes.
 - Code should evolve from source preview to VS Code-like project work: editor tabs, file create/move/delete, terminal panel, and Hermes tool/activity side panel. Terminal support must be designed as a server-side terminal bridge. macOS may later expose local-development conveniences, but iOS/iPadOS cannot spawn a local shell and should only control terminal sessions running on the Workspace/Hermes server.
 - File operations should expand from create-only UI to full rename, move, copy, drag-and-drop, delete with trash/undo, and conflict resolution.
