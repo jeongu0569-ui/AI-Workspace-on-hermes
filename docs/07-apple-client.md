@@ -108,6 +108,8 @@ Implemented:
 - iOS Simulator build support
 - iOS device build support when the local Xcode signing team is configured
 - physical iPhone app installation has been verified with a local Personal Team
+- global chat side panel for Notes, Code, and Search. macOS shows a compact
+  right-side split panel; iOS opens the same compact chat surface as a sheet.
 
 Not yet implemented:
 
@@ -141,6 +143,23 @@ WS /api/live
 
 on the Workspace Server. The server is responsible for Hermes dashboard login,
 WebSocket ticket creation, Hermes live session routing, and approval forwarding.
+
+Chat can be used in two places:
+
+```text
+Chat tab
+  -> full-page ChatHomeView
+
+Notes / Code / Search toolbar chat button
+  -> compact ChatHomeView
+  -> macOS: right-side split panel
+  -> iOS: modal sheet
+```
+
+The global panel uses the same `WorkspaceStore`, live session, model picker,
+access mode, reasoning mode, session manager, approval controls, and message
+history as the main Chat tab. It is a different presentation of the same chat
+state, not a separate local chat instance.
 
 The current client flow is:
 

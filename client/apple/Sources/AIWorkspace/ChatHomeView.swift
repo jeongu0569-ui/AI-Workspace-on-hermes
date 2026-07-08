@@ -12,6 +12,7 @@ import UIKit
 
 struct ChatHomeView: View {
     @EnvironmentObject private var store: WorkspaceStore
+    var compact = false
     @State private var draft = ""
     @State private var showingSessionManager = false
 
@@ -26,7 +27,7 @@ struct ChatHomeView: View {
                         }
                     }
                 }
-                .padding(24)
+                .padding(compact ? 14 : 24)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider()
@@ -125,7 +126,7 @@ struct ChatHomeView: View {
                 .padding(10)
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
             }
-            .padding(16)
+            .padding(compact ? 12 : 16)
         }
         .sheet(isPresented: $showingSessionManager) {
             SessionManagerView(isPresented: $showingSessionManager)
@@ -137,7 +138,7 @@ struct ChatHomeView: View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Hermes Chat")
-                    .font(.title2.weight(.semibold))
+                    .font(compact ? .headline.weight(.semibold) : .title2.weight(.semibold))
                 Text(store.workspace?.hermes.serverUrl ?? "No Hermes server loaded")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -150,8 +151,8 @@ struct ChatHomeView: View {
             sessionMenu
                 .frame(maxWidth: 260, alignment: .trailing)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, compact ? 14 : 20)
+        .padding(.vertical, compact ? 10 : 14)
         .background(.background)
     }
 

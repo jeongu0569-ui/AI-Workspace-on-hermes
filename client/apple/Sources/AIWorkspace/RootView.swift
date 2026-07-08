@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var store: WorkspaceStore
     @State private var selection: WorkspaceSection? = .chat
+    @State private var isChatPanelVisible = false
 
     var body: some View {
         NavigationSplitView {
@@ -16,16 +17,77 @@ struct RootView: View {
                     .padding(12)
             }
         } detail: {
-            switch selection ?? .chat {
-            case .chat:
-                ChatHomeView()
-            case .notes:
-                FileSectionView(title: "Notes", root: "notes")
-            case .code:
-                FileSectionView(title: "Code", root: "code")
-            case .search:
-                SearchView()
+            detailView
+                .toolbar {
+                    if selectedSection != .chat {
+                        Button {
+                            isChatPanelVisible.toggle()
+                        } label: {
+                            Image(systemName: isChatPanelVisible ? "sidebar.right" : "bubble.right")
+                        }
+                        .help(isChatPanelVisible ? "Hide chat panel" : "Show chat panel")
+                    }
+                }
+                .sheet(isPresented: chatPanelSheetBinding) {
+                    ChatHomeView(compact: true)
+                        .environmentObject(store)
+                }
+        }
+    }
+
+    private var selectedSection: WorkspaceSection {
+        selection ?? .chat
+    }
+
+    private var chatPanelSheetBinding: Binding<Bool> {
+        Binding(
+            get: {
+                #if os(iOS)
+                return isChatPanelVisible && selectedSection != .chat
+                #else
+                return false
+                #endif
+            },
+            set: { value in
+                #if os(iOS)
+                isChatPanelVisible = value
+                #else
+                _ = value
+                #endif
             }
+        )
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        #if os(macOS)
+        if selectedSection != .chat && isChatPanelVisible {
+            HSplitView {
+                primaryDetailView
+                    .frame(minWidth: 0)
+                Divider()
+                ChatHomeView(compact: true)
+                    .frame(minWidth: 320, idealWidth: 390, maxWidth: 460)
+            }
+        } else {
+            primaryDetailView
+        }
+        #else
+        primaryDetailView
+        #endif
+    }
+
+    @ViewBuilder
+    private var primaryDetailView: some View {
+        switch selectedSection {
+        case .chat:
+            ChatHomeView()
+        case .notes:
+            FileSectionView(title: "Notes", root: "notes")
+        case .code:
+            FileSectionView(title: "Code", root: "code")
+        case .search:
+            SearchView()
         }
     }
 }
