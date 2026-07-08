@@ -9,6 +9,9 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "marked": "^18.0.5",
+    "shiki": "^4.3.1"
   }
 }
-

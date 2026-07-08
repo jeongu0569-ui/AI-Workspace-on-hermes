@@ -104,6 +104,11 @@ struct WorkspaceAPI {
         let _: EmptyResponse = try await request(components, method: "DELETE")
     }
 
+    func renderMarkdown(markdown: String) async throws -> String {
+        let response: RenderedMarkdownResponse = try await post("/api/render/markdown", body: ["markdown": markdown])
+        return response.html
+    }
+
     func search(query: String, scopePath: String) async throws -> SearchResponse {
         let body = [
             "query": query,

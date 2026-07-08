@@ -79,6 +79,10 @@ struct SearchResponse: Codable {
     let results: [Result]
 }
 
+struct RenderedMarkdownResponse: Codable {
+    let html: String
+}
+
 struct HermesModelOption: Identifiable, Hashable {
     var id: String { provider.map { "\($0):\(model)" } ?? model }
     let label: String

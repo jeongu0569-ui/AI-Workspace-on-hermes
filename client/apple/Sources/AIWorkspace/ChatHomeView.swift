@@ -1,5 +1,10 @@
 import SwiftUI
 #if os(macOS)
+import WebKit
+#elseif os(iOS)
+import WebKit
+#endif
+#if os(macOS)
 import AppKit
 #elseif os(iOS)
 import UIKit
@@ -468,19 +473,57 @@ struct MessageBubble: View {
 }
 
 struct RichMarkdownView: View {
+    @EnvironmentObject private var store: WorkspaceStore
     let markdown: String
+    @State private var renderedHTML: String?
+    @State private var webHeight: CGFloat = 80
+    @State private var renderFailed = false
 
     var body: some View {
+        Group {
+            if let renderedHTML, !renderFailed {
+                RenderedMarkdownWebView(html: renderedHTML, height: $webHeight)
+                    .frame(minHeight: webHeight, maxHeight: webHeight)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                nativeMarkdownView
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: markdown) {
+            await loadServerRenderedHTML()
+        }
+    }
+
+    private var nativeMarkdownView: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(markdownBlocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var markdownBlocks: [MarkdownBlock] {
         parseMarkdownBlocks(markdown)
+    }
+
+    private func loadServerRenderedHTML() async {
+        guard let api = store.api else {
+            renderFailed = true
+            renderedHTML = nil
+            return
+        }
+        do {
+            try await Task.sleep(nanoseconds: 250_000_000)
+            let html = try await api.renderMarkdown(markdown: markdown)
+            guard !Task.isCancelled else { return }
+            renderedHTML = html
+            renderFailed = false
+        } catch {
+            guard !Task.isCancelled else { return }
+            renderedHTML = nil
+            renderFailed = true
+        }
     }
 
     @ViewBuilder
@@ -578,6 +621,105 @@ struct RichMarkdownView: View {
             ?? AttributedString(text)
     }
 }
+
+#if os(macOS)
+struct RenderedMarkdownWebView: NSViewRepresentable {
+    let html: String
+    @Binding var height: CGFloat
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(height: $height)
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.navigationDelegate = context.coordinator
+        webView.setValue(false, forKey: "drawsBackground")
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.height = $height
+        if context.coordinator.currentHTML != html {
+            context.coordinator.currentHTML = html
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var height: Binding<CGFloat>
+        var currentHTML = ""
+
+        init(height: Binding<CGFloat>) {
+            self.height = height
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            updateHeight(webView)
+        }
+
+        private func updateHeight(_ webView: WKWebView) {
+            webView.evaluateJavaScript("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)") { [weak self] value, _ in
+                guard let self else { return }
+                let next = CGFloat(value as? Double ?? 80)
+                DispatchQueue.main.async {
+                    self.height.wrappedValue = max(32, next)
+                }
+            }
+        }
+    }
+}
+#elseif os(iOS)
+struct RenderedMarkdownWebView: UIViewRepresentable {
+    let html: String
+    @Binding var height: CGFloat
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(height: $height)
+    }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.navigationDelegate = context.coordinator
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
+        return webView
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.height = $height
+        if context.coordinator.currentHTML != html {
+            context.coordinator.currentHTML = html
+            webView.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        var height: Binding<CGFloat>
+        var currentHTML = ""
+
+        init(height: Binding<CGFloat>) {
+            self.height = height
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            updateHeight(webView)
+        }
+
+        private func updateHeight(_ webView: WKWebView) {
+            webView.evaluateJavaScript("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)") { [weak self] value, _ in
+                guard let self else { return }
+                let next = CGFloat(value as? Double ?? 80)
+                DispatchQueue.main.async {
+                    self.height.wrappedValue = max(32, next)
+                }
+            }
+        }
+    }
+}
+#endif
 
 struct CodeBlockView: View {
     let language: String?

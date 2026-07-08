@@ -85,6 +85,10 @@ Implemented:
   normalizes common aliases and has profiles for Python, C/C++, Java/Kotlin/C#,
   JavaScript/TypeScript, Swift, Rust, Go, shell/Dockerfile/Makefile, SQL,
   JSON/YAML, HTML/XML, CSS, Ruby, PHP, Markdown, and fallback code.
+- server-rendered Markdown is now available through `POST /api/render/markdown`.
+  The server uses `marked` for Markdown and `shiki` for code highlighting, then
+  the Apple client displays the result through `WKWebView`. If the server render
+  request fails, the existing native SwiftUI renderer remains as fallback.
 - Notes and Code file browsers can create a new file or folder in the current
   server-managed folder. New Notes files default to `.md`; new Code files
   default to `.swift` unless the user enters an extension.
@@ -213,6 +217,20 @@ Markdown file -> RichMarkdownView
 Code file     -> CodeBlockView(language from extension)
 Other text    -> plain monospaced text
 ```
+
+`RichMarkdownView` first attempts server rendering:
+
+```text
+RichMarkdownView
+  -> POST /api/render/markdown
+  -> WKWebView rendered HTML
+  -> fallback to native SwiftUI Markdown blocks if unavailable
+```
+
+The server-rendered path gives Markdown tables and fenced code blocks a much
+closer rendering model to Hermes Desktop. Shiki runs on the Workspace Server,
+so iOS does not need to bundle a JavaScript highlighter or parse TextMate
+grammars locally.
 
 The Notes and Code browser panes call the Workspace Server file APIs instead of
 touching local client storage directly:
