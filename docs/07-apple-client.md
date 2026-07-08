@@ -166,6 +166,14 @@ split the text into blocks first, then render headings, bullets, fenced code
 blocks, and table rows with dedicated views. Inline emphasis/code is still
 handled through Swift `AttributedString(markdown:)` inside each text cell.
 
+Fenced code blocks preserve the language tag from Markdown fences such as
+```` ```python ```` and render a compact `Code · python` header. The code body
+uses a lightweight local highlighter for comments, strings, numbers, and common
+keywords so it reads closer to a code editor than plain text. The code card also
+includes an inline copy button, mirroring the Hermes Desktop code-card pattern.
+Markdown tables render in a bordered, horizontally scrollable table view with
+styled header cells.
+
 While an activity block is streaming, its collapsed state shows a three-line
 preview of the latest reasoning/tool text and a subtle shimmer. When streaming
 finishes, the shimmer stops and the collapsed row returns to the summary-only

@@ -1,4 +1,9 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 struct ChatHomeView: View {
     @EnvironmentObject private var store: WorkspaceStore
@@ -7,19 +12,7 @@ struct ChatHomeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HeaderView(title: "Hermes Chat", subtitle: store.workspace?.hermes.serverUrl ?? "No Hermes server loaded")
-            HStack(spacing: 8) {
-                Image(systemName: "bubble.left.and.bubble.right")
-                    .foregroundStyle(.secondary)
-                Text(store.activeHermesSessionTitle)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 8)
-            .background(.quaternary.opacity(0.18))
+            chatHeader
             ScrollView {
                 VStack(spacing: 14) {
                     ForEach(store.chatLines) { line in
@@ -33,36 +26,6 @@ struct ChatHomeView: View {
             }
             Divider()
             VStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    Menu {
-                        if store.hermesSessions.isEmpty {
-                            Text("No sessions loaded")
-                        } else {
-                            ForEach(store.hermesSessions) { session in
-                                Button {
-                                    Task { await store.resumeHermesSession(session) }
-                                } label: {
-                                    VStack(alignment: .leading) {
-                                        Text(session.title)
-                                        if let updatedAt = session.updatedAt {
-                                            Text(updatedAt)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } label: {
-                        Label(store.activeHermesSessionTitle == "No session" ? "Sessions" : store.activeHermesSessionTitle, systemImage: "clock.arrow.circlepath")
-                            .lineLimit(1)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .simultaneousGesture(TapGesture().onEnded {
-                        Task { await store.refreshHermesMetadata() }
-                    })
-
-                    Spacer()
-                }
-
                 HStack(spacing: 10) {
                     Picker("Context", selection: $store.chatContextScope) {
                         ForEach(ChatContextScope.allCases) { scope in
@@ -163,6 +126,63 @@ struct ChatHomeView: View {
             SessionManagerView(isPresented: $showingSessionManager)
                 .environmentObject(store)
         }
+    }
+
+    private var chatHeader: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Hermes Chat")
+                    .font(.title2.weight(.semibold))
+                Text(store.workspace?.hermes.serverUrl ?? "No Hermes server loaded")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 10)
+
+            sessionMenu
+                .frame(maxWidth: 260, alignment: .trailing)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(.background)
+    }
+
+    private var sessionMenu: some View {
+        Menu {
+            if store.hermesSessions.isEmpty {
+                Text("No sessions loaded")
+            } else {
+                ForEach(store.hermesSessions) { session in
+                    Button {
+                        Task { await store.resumeHermesSession(session) }
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text(session.title)
+                            if let updatedAt = session.updatedAt {
+                                Text(updatedAt)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "bubble.left")
+                    .foregroundStyle(.secondary)
+                Text(store.activeHermesSessionTitle == "No session" ? "Session: none" : store.activeHermesSessionTitle)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .font(.subheadline.weight(.medium))
+        }
+        .menuStyle(.borderlessButton)
+        .simultaneousGesture(TapGesture().onEnded {
+            Task { await store.refreshHermesMetadata() }
+        })
+        .help("Select Hermes session")
     }
 
     private func sendDraft() {
@@ -483,15 +503,8 @@ private struct MarkdownText: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        case let .code(text):
-            ScrollView(.horizontal) {
-                Text(text)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+        case let .code(language, text):
+            MarkdownCodeBlock(language: language, code: text)
         case let .table(table):
             markdownTable(table)
         }
@@ -508,8 +521,13 @@ private struct MarkdownText: View {
                     }
                 }
             }
+            .background(.quaternary.opacity(0.10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.quaternary.opacity(0.65), lineWidth: 1)
+            )
         }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func headingFont(_ level: Int) -> Font {
@@ -526,6 +544,63 @@ private struct MarkdownText: View {
     }
 }
 
+private struct MarkdownCodeBlock: View {
+    let language: String?
+    let code: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .foregroundStyle(.secondary)
+                Text("Code")
+                    .font(.caption.weight(.semibold))
+                if let language, !language.isEmpty {
+                    Text("· \(language)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    copyToClipboard(code)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.caption2)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Copy code")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.quaternary.opacity(0.24))
+
+            ScrollView(.horizontal) {
+                Text(highlightedCode(code, language: language))
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(.black.opacity(0.10))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.quaternary.opacity(0.55), lineWidth: 1)
+        )
+    }
+}
+
+private func copyToClipboard(_ text: String) {
+    #if os(macOS)
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+    #elseif os(iOS)
+    UIPasteboard.general.string = text
+    #endif
+}
+
 private struct MarkdownTableCell: View {
     let text: AttributedString
     let isHeader: Bool
@@ -536,9 +611,9 @@ private struct MarkdownTableCell: View {
             .textSelection(.enabled)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .frame(minWidth: 90, alignment: .leading)
+            .frame(minWidth: 118, maxWidth: 240, alignment: .leading)
             .background(cellBackground)
-            .overlay(Rectangle().stroke(.quaternary.opacity(0.5), lineWidth: 0.5))
+            .overlay(Rectangle().stroke(.quaternary.opacity(0.38), lineWidth: 0.5))
     }
 
     private var cellBackground: AnyShapeStyle {
@@ -575,6 +650,102 @@ private extension View {
     }
 }
 
+private func highlightedCode(_ code: String, language: String?) -> AttributedString {
+    var result = AttributedString()
+    let keywordSet = codeKeywords(for: language)
+    let scalars = Array(code)
+    var index = 0
+
+    func append(_ text: String, color: Color? = nil) {
+        var part = AttributedString(text)
+        if let color {
+            part.foregroundColor = color
+        }
+        result.append(part)
+    }
+
+    while index < scalars.count {
+        let char = scalars[index]
+
+        if char == "#" {
+            let start = index
+            while index < scalars.count, scalars[index] != "\n" {
+                index += 1
+            }
+            append(String(scalars[start..<index]), color: .secondary)
+            continue
+        }
+
+        if char == "\"" || char == "'" {
+            let quote = char
+            let start = index
+            index += 1
+            var escaped = false
+            while index < scalars.count {
+                let current = scalars[index]
+                index += 1
+                if escaped {
+                    escaped = false
+                    continue
+                }
+                if current == "\\" {
+                    escaped = true
+                    continue
+                }
+                if current == quote {
+                    break
+                }
+            }
+            append(String(scalars[start..<index]), color: .green)
+            continue
+        }
+
+        if char.isNumber {
+            let start = index
+            while index < scalars.count, scalars[index].isNumber || scalars[index] == "." {
+                index += 1
+            }
+            append(String(scalars[start..<index]), color: .orange)
+            continue
+        }
+
+        if char.isLetter || char == "_" {
+            let start = index
+            while index < scalars.count, scalars[index].isLetter || scalars[index].isNumber || scalars[index] == "_" {
+                index += 1
+            }
+            let token = String(scalars[start..<index])
+            append(token, color: keywordSet.contains(token) ? .purple : nil)
+            continue
+        }
+
+        append(String(char))
+        index += 1
+    }
+
+    return result
+}
+
+private func codeKeywords(for language: String?) -> Set<String> {
+    let normalized = language?.lowercased() ?? ""
+    if ["python", "py"].contains(normalized) {
+        return [
+            "and", "as", "assert", "async", "await", "break", "class", "continue",
+            "def", "del", "elif", "else", "except", "False", "finally", "for",
+            "from", "global", "if", "import", "in", "is", "lambda", "None",
+            "nonlocal", "not", "or", "pass", "raise", "return", "True", "try",
+            "while", "with", "yield"
+        ]
+    }
+    return [
+        "async", "await", "break", "case", "catch", "class", "const", "continue",
+        "default", "else", "enum", "export", "extends", "false", "for", "func",
+        "function", "guard", "if", "import", "in", "let", "nil", "null", "private",
+        "public", "return", "static", "struct", "switch", "throw", "true", "try",
+        "var", "while"
+    ]
+}
+
 private func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
     let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
     var blocks: [MarkdownBlock] = []
@@ -601,6 +772,11 @@ private func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
 
         if trimmed.hasPrefix("```") {
             flushParagraph()
+            let language = String(trimmed.dropFirst(3))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: " ")
+                .first
+                .map(String.init)
             index += 1
             var code: [String] = []
             while index < lines.count {
@@ -612,7 +788,7 @@ private func parseMarkdownBlocks(_ markdown: String) -> [MarkdownBlock] {
                 code.append(codeLine)
                 index += 1
             }
-            blocks.append(.code(code.joined(separator: "\n")))
+            blocks.append(.code(language: language, text: code.joined(separator: "\n")))
             continue
         }
 

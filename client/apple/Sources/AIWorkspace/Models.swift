@@ -101,7 +101,7 @@ enum MarkdownBlock: Identifiable {
     case heading(level: Int, text: String)
     case paragraph(String)
     case bullet(String)
-    case code(String)
+    case code(language: String?, text: String)
     case table(MarkdownTable)
 
     var id: UUID { UUID() }
