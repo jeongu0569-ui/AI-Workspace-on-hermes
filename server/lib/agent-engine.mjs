@@ -22,7 +22,8 @@ export class WorkspaceAgentEngine extends EventEmitter {
     this.state = new WorkspaceAgentStateStore(config.workspaceRoot);
     this.codeRuntime = new CodeAgentRuntime({
       workspaceRoot: config.workspaceRoot,
-      stateStore: this.state
+      stateStore: this.state,
+      hermes: config.hermes
     });
     this.eventWrites = new Set();
 
@@ -167,6 +168,18 @@ export class WorkspaceAgentEngine extends EventEmitter {
 
   async proposeCodeTaskPatch(taskId, params = {}) {
     const result = await this.codeRuntime.proposePatch(taskId, params);
+    if (result.approvalRequest) {
+      this.emit("event", {
+        engine: "workspace-agent",
+        adapter: "code-agent",
+        ...result.approvalRequest
+      });
+    }
+    return result;
+  }
+
+  async generateCodeTaskPatch(taskId, params = {}) {
+    const result = await this.codeRuntime.generateAutomaticPatch(taskId, params);
     if (result.approvalRequest) {
       this.emit("event", {
         engine: "workspace-agent",

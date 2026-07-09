@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createServer } from "node:http";
 import { CodeAgentRuntime } from "./code-agent-runtime.mjs";
 import { WorkspaceAgentStateStore } from "./agent-engine.mjs";
+import { acceptWebSocket, createFrameDecoder, encodeWebSocketFrame } from "./hermes-live.mjs";
 
 test("code agent runtime inspects a Code project and records artifacts", async () => {
   const root = await fixtureCodeWorkspace();
@@ -245,3 +247,149 @@ async function fixtureCodeWorkspace() {
   await fs.writeFile(path.join(project, "README.md"), "# Demo app\n\nThe greeting renderer is intentionally small.\n", "utf8");
   return root;
 }
+
+test("code agent runtime generates automatic patches using mock LLM server", async () => {
+  const server = createServer();
+  const wss = [];
+  
+  // Handle HTTP authentication & token requests
+  server.on("request", (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    res.setHeader("content-type", "application/json");
+    if (url.pathname === "/api/auth/providers") {
+      res.end(JSON.stringify({
+        providers: [{ name: "mock-password-provider", supports_password: true }]
+      }));
+    } else if (url.pathname === "/auth/password-login") {
+      res.setHeader("set-cookie", "session=mock-cookie-abc");
+      res.end(JSON.stringify({ ok: true }));
+    } else if (url.pathname === "/api/auth/ws-ticket") {
+      res.end(JSON.stringify({ ticket: "mock-ticket-123" }));
+    } else {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: "Not Found" }));
+    }
+  });
+  
+  // Handle WebSocket upgraded connection
+  server.on("upgrade", (req, socket) => {
+    wss.push(socket);
+    acceptWebSocket(req, socket);
+    
+    const decode = createFrameDecoder((payloadStr) => {
+      try {
+        const payload = JSON.parse(payloadStr);
+        if (payload.method === "session.create") {
+          socket.write(encodeWebSocketFrame({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: { session_id: "mock-sess-1", stored_session_id: "mock-sess-1" }
+          }));
+        } else if (payload.method === "session.resume") {
+          socket.write(encodeWebSocketFrame({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: { session_id: "mock-sess-1" }
+          }));
+        } else if (payload.method === "config.set") {
+          socket.write(encodeWebSocketFrame({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: { ok: true }
+          }));
+        } else if (payload.method === "prompt.submit") {
+          socket.write(encodeWebSocketFrame({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: { ok: true }
+          }));
+          
+          const mockAnswer = JSON.stringify({
+            summary: "Mock automatic patch",
+            changes: [
+              {
+                path: "src/index.js",
+                find: "return 'hello';",
+                replace: "return 'auto-patched';"
+              }
+            ]
+          });
+          
+          socket.write(encodeWebSocketFrame({
+            jsonrpc: "2.0",
+            method: "event",
+            params: {
+              type: "message.delta",
+              text: mockAnswer,
+              payload: {
+                text: mockAnswer
+              }
+            }
+          }));
+          
+          socket.write(encodeWebSocketFrame({
+            jsonrpc: "2.0",
+            method: "event",
+            params: {
+              type: "message.done",
+              payload: {}
+            }
+          }));
+        }
+      } catch (err) {
+        console.error("Mock WebSocket parse err", err);
+      }
+    });
+    
+    socket.on("data", (chunk) => decode(chunk));
+  });
+
+  const port = await new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve(server.address().port);
+    });
+  });
+
+  try {
+    const root = await fixtureCodeWorkspace();
+    const state = new WorkspaceAgentStateStore(root);
+    const runtime = new CodeAgentRuntime({
+      workspaceRoot: root,
+      stateStore: state,
+      hermes: {
+        hermesServerUrl: `http://127.0.0.1:${port}`,
+        dashboardUsername: "test",
+        dashboardPassword: "test"
+      }
+    });
+
+    const result = await runtime.inspectTask({
+      scopePath: "Code/demo-app",
+      instruction: "Change the greeting renderer",
+      maxFiles: 20
+    });
+
+    assert.equal(result.status, "inspected");
+
+    const patch = await runtime.generateAutomaticPatch(result.taskId);
+    assert.equal(patch.status, "patch_proposed");
+    assert.equal(patch.proposal.summary, "Mock automatic patch");
+    assert.equal(patch.proposal.changes[0].path, "Code/demo-app/src/index.js");
+    assert.equal(patch.proposal.changes[0].operation, "replace");
+    assert.ok(patch.proposal.changes[0].newHash);
+
+    const proposedTask = JSON.parse(await fs.readFile(
+      path.join(root, ".ai-workspace", "tasks", `${result.taskId}.json`),
+      "utf8"
+    ));
+    assert.equal(proposedTask.status, "patch_proposed");
+    assert.equal(proposedTask.patchProposals[0].summary, "Mock automatic patch");
+
+  } finally {
+    for (const socket of wss) {
+      try { socket.destroy(); } catch {}
+    }
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+

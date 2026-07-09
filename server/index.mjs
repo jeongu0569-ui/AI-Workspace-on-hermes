@@ -284,6 +284,10 @@ async function handleRequest(req, res) {
     if (codePatchProposeMatch && req.method === "POST") {
       return sendJson(res, await proposeCodeTaskPatch(codePatchProposeMatch[1], req), 201);
     }
+    const codePatchGenerateMatch = url.pathname.match(/^\/api\/agent\/code-task\/([^/]+)\/patches\/generate$/);
+    if (codePatchGenerateMatch && req.method === "POST") {
+      return sendJson(res, await generateCodeTaskPatch(codePatchGenerateMatch[1], req), 201);
+    }
     const codePatchApplyMatch = url.pathname.match(/^\/api\/agent\/code-task\/([^/]+)\/patches\/([^/]+)\/apply$/);
     if (codePatchApplyMatch && req.method === "POST") {
       return sendJson(res, await applyCodeTaskPatch(codePatchApplyMatch[1], codePatchApplyMatch[2], req));
@@ -631,6 +635,16 @@ async function proposeCodeTaskPatch(taskId, req) {
   const engine = createAgentEngine();
   try {
     return await engine.proposeCodeTaskPatch(decodeURIComponent(taskId), body);
+  } finally {
+    engine.close();
+  }
+}
+
+async function generateCodeTaskPatch(taskId, req) {
+  const body = await readJsonBody(req);
+  const engine = createAgentEngine();
+  try {
+    return await engine.generateCodeTaskPatch(decodeURIComponent(taskId), body);
   } finally {
     engine.close();
   }

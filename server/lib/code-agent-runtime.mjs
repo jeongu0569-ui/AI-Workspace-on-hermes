@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileKind, joinWorkspacePath, resolveWorkspacePath } from "./path-utils.mjs";
 import { searchWorkspace } from "./search-service.mjs";
+import { HermesLiveClient } from "./hermes-live.mjs";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -35,9 +36,10 @@ const TEXT_EXTENSIONS = new Set([
 const PATCH_CONTENT_LIMIT = 2 * 1024 * 1024;
 
 export class CodeAgentRuntime {
-  constructor({ workspaceRoot, stateStore }) {
+  constructor({ workspaceRoot, stateStore, hermes }) {
     this.workspaceRoot = workspaceRoot;
     this.state = stateStore;
+    this.hermes = hermes;
   }
 
   async inspectTask(params = {}) {
@@ -221,6 +223,142 @@ export class CodeAgentRuntime {
       git: updated.git,
       taskMemory: updated.taskMemory
     };
+  }
+
+  async generateAutomaticPatch(taskId, params = {}) {
+    if (!this.hermes) {
+      throw Object.assign(new Error("Automatic patch generation requires Hermes configuration."), { status: 400 });
+    }
+    const task = await this.state.readTask(requireTaskId(taskId));
+    if (task.type !== "code") {
+      throw Object.assign(new Error("Only code tasks can generate automatic patches."), { status: 400 });
+    }
+    const scope = this.resolveCodeScope(task.scopePath || params.scopePath || "Code");
+
+    const readFiles = task.taskMemory?.readFiles || [];
+    const fileContents = [];
+    for (const relPath of readFiles) {
+      try {
+        const absPath = path.join(this.workspaceRoot, relPath);
+        const stat = await fs.stat(absPath);
+        if (stat.isFile() && stat.size < 150000) {
+          const content = await fs.readFile(absPath, "utf8");
+          fileContents.push({ path: relPath, content });
+        }
+      } catch {}
+    }
+
+    const systemPrompt = `You are an expert software developer.
+Your task is to generate a code patch proposal (a list of find/replace changes) to fulfill the user's instruction based on the provided file contents.
+
+You MUST respond with a single valid JSON object containing exactly two keys: "summary" and "changes".
+The JSON structure MUST look exactly like this:
+{
+  "summary": "Brief explanation of what this patch does.",
+  "changes": [
+    {
+      "path": "Code/demo-app/src/index.js",
+      "find": "Exact code block to find in the target file. MUST match exactly, including spaces, indentation, and newlines.",
+      "replace": "The replacement code block."
+    }
+  ]
+}
+
+Rules:
+- Do NOT wrap your JSON response in markdown code blocks like \`\`\`json ... \`\`\`. Just return raw JSON.
+- The "find" string must exist exactly as written in the target file, otherwise the patch application will fail.
+- Output ONLY the JSON object. Do not write any greetings or preambles.`;
+
+    const userPrompt = `Instruction: ${task.message}
+
+Workspace Root: ${this.workspaceRoot}
+
+Target Files and Contents:
+${fileContents.map(f => `
+---
+File Path: ${f.path}
+Content:
+${f.content}
+---`).join("\n")}`;
+
+    await this.state.recordToolLog({
+      type: "code.patch.generate.start",
+      taskId: task.id,
+      scopePath: scope.relativePath
+    });
+
+    const client = new HermesLiveClient(this.hermes);
+    await client.connect();
+
+    const session = await client.createSession({
+      accessMode: "full",
+      reasoningEffort: "medium"
+    });
+
+    let answerText = "";
+    let resolveDone;
+    let rejectError;
+    const promise = new Promise((resolve, reject) => {
+      resolveDone = resolve;
+      rejectError = reject;
+    });
+
+    client.on("event", (envelope) => {
+      const type = envelope.type || "";
+      const text = envelope.text || "";
+
+      if (type === "message.delta" || type === "assistant.delta" || type === "assistant.message.delta") {
+        answerText += text;
+      } else if (
+        type === "message.done" ||
+        type === "response.done" ||
+        type === "turn.complete" ||
+        type === "turn.completed" ||
+        type === "message.completed"
+      ) {
+        resolveDone();
+      }
+    });
+
+    client.on("close", () => {
+      rejectError(new Error("Hermes connection closed prematurely."));
+    });
+
+    try {
+      await client.submitPrompt({
+        sessionId: session.sessionId,
+        message: systemPrompt + "\n\n" + userPrompt
+      });
+
+      await promise;
+    } finally {
+      client.close();
+    }
+
+    let patchSpec;
+    try {
+      patchSpec = parseJsonAnswer(answerText);
+    } catch (parseErr) {
+      throw Object.assign(new Error(`Failed to parse LLM patch response as JSON. Raw: ${answerText.slice(0, 300)}`), { status: 500 });
+    }
+
+    if (!patchSpec || !Array.isArray(patchSpec.changes)) {
+      throw Object.assign(new Error("LLM response did not contain a valid changes array."), { status: 500 });
+    }
+
+    const result = await this.proposePatch(task.id, {
+      changes: patchSpec.changes,
+      summary: patchSpec.summary || `LLM-generated patch for task: ${task.message}`
+    });
+
+    await this.state.recordToolLog({
+      type: "code.patch.generate.complete",
+      taskId: task.id,
+      scopePath: scope.relativePath,
+      proposalId: result.proposal.id
+    });
+
+    return result;
   }
 
   async proposePatch(taskId, params = {}) {
@@ -1040,6 +1178,21 @@ function clampNumber(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(number)));
+}
+
+function parseJsonAnswer(text) {
+  let cleaned = text.trim();
+  const jsonBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/;
+  const match = cleaned.match(jsonBlockRegex);
+  if (match) {
+    cleaned = match[1].trim();
+  }
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+  }
+  return JSON.parse(cleaned);
 }
 
 function requireInstruction(value) {
