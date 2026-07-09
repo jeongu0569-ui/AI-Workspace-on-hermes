@@ -53,6 +53,8 @@ The first migration step is already underway:
 - A first AI Workspace-owned OpenAI-compatible chat backend can execute
   configured models and stream `message.delta` events without a separate
   external runtime server.
+- A first read-only workspace tool registry lets capable models call search,
+  file-read, and folder-list tools through AI Workspace-owned code.
 
 ## Next Step
 
@@ -71,6 +73,7 @@ server/lib/runtime/
   sandbox.mjs
 ```
 
-Next, broaden execution ownership: add provider-specific auth flows, tool
-calling, approval-gated mutating tools, MCP search orchestration, and richer
-model capability metadata on top of the first OpenAI-compatible backend.
+Next, broaden execution ownership: add provider-specific auth flows,
+approval-gated mutating tools, MCP search orchestration, and richer model
+capability metadata on top of the first OpenAI-compatible backend and read-only
+workspace tools.

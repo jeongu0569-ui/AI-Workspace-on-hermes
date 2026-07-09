@@ -38,6 +38,7 @@ This repository currently contains the first server-centered scaffold:
 - file/folder create, move, copy, upload, and delete API
 - AI Workspace model/provider/auth config store under `.ai-workspace/config`
 - first OpenAI-compatible model execution backend owned by AI Workspace
+- read-only Workspace tool calling for search, file reads, and folder tree listing
 - AI Workspace session store under `.ai-workspace/sessions`
 - live WebSocket endpoint at `WS /api/live`
 - workspace context router for note/folder/PDF/workspace scopes

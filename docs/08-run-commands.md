@@ -111,6 +111,19 @@ aiw auth set custom AIW_CUSTOM_BASE_URL http://127.0.0.1:1234/v1
 aiw auth set custom AIW_CUSTOM_API_KEY local-dev-key
 ```
 
+When the selected model supports OpenAI-compatible tool calls, AI Workspace
+also offers read-only workspace tools:
+
+```text
+workspace_search
+workspace_read_file
+workspace_list_tree
+```
+
+These tools run inside the Workspace Server, so the client can show
+`tool.start` / `tool.complete` activity without handing raw filesystem access
+to the model provider.
+
 ## Workspace APIs
 
 ```bash

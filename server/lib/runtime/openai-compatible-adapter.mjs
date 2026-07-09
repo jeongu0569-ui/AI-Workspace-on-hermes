@@ -5,6 +5,10 @@ import {
   readCredentials,
   readRuntimeConfig
 } from "./config-store.mjs";
+import {
+  executeWorkspaceTool,
+  WORKSPACE_TOOL_DEFINITIONS
+} from "./workspace-tools.mjs";
 
 const OPENAI_COMPATIBLE_DEFAULTS = {
   "openai-api": "https://api.openai.com/v1",
@@ -64,7 +68,6 @@ export class OpenAICompatibleRuntimeAdapter extends EventEmitter {
   async submitPrompt(params = {}) {
     const selection = await this.resolveModelSelection(params);
     const messages = buildMessages(params);
-    let reply = "";
 
     this.emit("event", {
       type: "turn.start",
@@ -74,6 +77,69 @@ export class OpenAICompatibleRuntimeAdapter extends EventEmitter {
       model: selection.model
     });
 
+    const result = await this.runChatLoop(selection, messages, params);
+
+    this.emit("event", {
+      type: "turn.complete",
+      sessionId: params.sessionId,
+      taskId: params.taskId,
+      text: result.reply
+    });
+
+    return {
+      ok: true,
+      sessionId: params.sessionId,
+      runtimeSessionId: params.sessionId,
+      reply: result.reply,
+      provider: selection.provider.id,
+      model: selection.model,
+      toolRounds: result.toolRounds
+    };
+  }
+
+  async runChatLoop(selection, messages, params) {
+    let reply = "";
+    let toolRounds = 0;
+    const maxToolRounds = clampNumber(params.maxToolRounds, 0, 6, 3);
+
+    for (let round = 0; round <= maxToolRounds; round += 1) {
+      const result = await this.requestChatCompletion(selection, messages, params);
+      reply += result.text;
+      if (!result.toolCalls.length) {
+        return { reply, toolRounds };
+      }
+
+      toolRounds += 1;
+      messages.push({
+        role: "assistant",
+        content: result.text || null,
+        tool_calls: result.toolCalls.map((call) => ({
+          id: call.id,
+          type: "function",
+          function: {
+            name: call.name,
+            arguments: call.arguments
+          }
+        }))
+      });
+
+      for (const call of result.toolCalls) {
+        const toolResult = await this.executeToolCall(call, params);
+        messages.push({
+          role: "tool",
+          tool_call_id: call.id,
+          name: call.name,
+          content: JSON.stringify(toolResult)
+        });
+      }
+    }
+
+    throw Object.assign(new Error("Tool call loop exceeded the maximum number of rounds."), { status: 502 });
+  }
+
+  async requestChatCompletion(selection, messages, params) {
+    let text = "";
+    const toolCalls = [];
     const headers = {
       "content-type": "application/json",
       accept: "text/event-stream, application/json",
@@ -88,6 +154,8 @@ export class OpenAICompatibleRuntimeAdapter extends EventEmitter {
         model: selection.model,
         messages,
         stream: true,
+        tools: WORKSPACE_TOOL_DEFINITIONS,
+        tool_choice: "auto",
         ...reasoningOptions(params.reasoningEffort)
       })
     });
@@ -103,43 +171,73 @@ export class OpenAICompatibleRuntimeAdapter extends EventEmitter {
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("application/json")) {
       const json = await response.json();
-      reply = extractNonStreamingText(json);
-      if (reply) {
+      text = extractNonStreamingText(json);
+      if (text) {
         this.emit("event", {
           type: "message.delta",
           sessionId: params.sessionId,
           taskId: params.taskId,
-          text: reply
+          text
         });
       }
+      toolCalls.push(...extractNonStreamingToolCalls(json));
     } else {
       for await (const chunk of parseOpenAIStream(response)) {
-        if (!chunk.text) continue;
-        reply += chunk.text;
-        this.emit("event", {
-          type: "message.delta",
-          sessionId: params.sessionId,
-          taskId: params.taskId,
-          text: chunk.text
-        });
+        if (chunk.text) {
+          text += chunk.text;
+          this.emit("event", {
+            type: "message.delta",
+            sessionId: params.sessionId,
+            taskId: params.taskId,
+            text: chunk.text
+          });
+        }
+        if (chunk.toolCallDelta) mergeToolCallDelta(toolCalls, chunk.toolCallDelta);
       }
     }
+    return {
+      text,
+      toolCalls: normalizeToolCalls(toolCalls)
+    };
+  }
 
+  async executeToolCall(call, params) {
     this.emit("event", {
-      type: "turn.complete",
+      type: "tool.start",
       sessionId: params.sessionId,
       taskId: params.taskId,
-      text: reply
+      toolCallId: call.id,
+      toolName: call.name,
+      text: call.name
     });
-
-    return {
-      ok: true,
-      sessionId: params.sessionId,
-      runtimeSessionId: params.sessionId,
-      reply,
-      provider: selection.provider.id,
-      model: selection.model
-    };
+    try {
+      const result = await executeWorkspaceTool(this.workspaceRoot, call.name, call.arguments);
+      this.emit("event", {
+        type: "tool.complete",
+        sessionId: params.sessionId,
+        taskId: params.taskId,
+        toolCallId: call.id,
+        toolName: call.name,
+        text: call.name,
+        result
+      });
+      return result;
+    } catch (error) {
+      const result = {
+        ok: false,
+        error: error?.message || "Tool execution failed."
+      };
+      this.emit("event", {
+        type: "tool.error",
+        sessionId: params.sessionId,
+        taskId: params.taskId,
+        toolCallId: call.id,
+        toolName: call.name,
+        text: result.error,
+        error: result.error
+      });
+      return result;
+    }
   }
 
   async respondToApproval(params = {}) {
@@ -319,7 +417,14 @@ async function* parseOpenAIStream(response) {
             || json.choices?.[0]?.message?.content
             || json.output_text
             || "";
-          if (text) yield { text, raw: json };
+          const toolCalls = json.choices?.[0]?.delta?.tool_calls || [];
+          if (text || toolCalls.length) {
+            yield {
+              text,
+              toolCallDelta: toolCalls.length ? toolCalls : null,
+              raw: json
+            };
+          }
         } catch {}
       }
     }
@@ -331,6 +436,49 @@ function extractNonStreamingText(json) {
     || json.choices?.[0]?.delta?.content
     || json.output_text
     || "";
+}
+
+function extractNonStreamingToolCalls(json) {
+  const calls = json.choices?.[0]?.message?.tool_calls || [];
+  return calls.map((call, index) => ({
+    id: call.id || `call_${index}`,
+    name: call.function?.name || "",
+    arguments: call.function?.arguments || "{}"
+  })).filter((call) => call.name);
+}
+
+function mergeToolCallDelta(toolCalls, deltas) {
+  for (const delta of deltas || []) {
+    const index = Number.isInteger(delta.index) ? delta.index : toolCalls.length;
+    if (!toolCalls[index]) {
+      toolCalls[index] = {
+        id: "",
+        name: "",
+        arguments: ""
+      };
+    }
+    const target = toolCalls[index];
+    if (delta.id) target.id += delta.id;
+    if (delta.function?.name) target.name += delta.function.name;
+    if (delta.function?.arguments) target.arguments += delta.function.arguments;
+  }
+}
+
+function normalizeToolCalls(toolCalls) {
+  return toolCalls
+    .filter(Boolean)
+    .map((call, index) => ({
+      id: call.id || `call_${index}`,
+      name: call.name || "",
+      arguments: call.arguments || "{}"
+    }))
+    .filter((call) => call.name);
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
 }
 
 function trimTrailingSlash(value) {

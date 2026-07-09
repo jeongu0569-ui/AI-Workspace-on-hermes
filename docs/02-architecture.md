@@ -147,3 +147,13 @@ The first owned runtime backend is an OpenAI-compatible adapter under
 provider/model from `.ai-workspace/config`, streams chat completions into
 AI Workspace live events, and lets the session runtime persist only the visible
 user/assistant messages.
+
+The adapter also exposes a first read-only tool registry:
+
+- `workspace_search`: search workspace text files.
+- `workspace_read_file`: read a workspace-relative text, markdown, or code file.
+- `workspace_list_tree`: list files and folders under a workspace path.
+
+Tool calls are executed by AI Workspace itself, emitted as `tool.start`,
+`tool.complete`, or `tool.error` live events, then passed back to the model as
+tool results before the final assistant message is streamed.
