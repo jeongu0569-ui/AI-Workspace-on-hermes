@@ -4,13 +4,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import readline from "node:readline";
 import {
   listCredentialStatus,
   listProviderRegistry,
   listRuntimeModels,
   removeCredentialValue,
   setCredentialValue,
-  setDefaultModel
+  setDefaultModel,
+  readRuntimeConfig
 } from "../server/lib/runtime/config-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -802,15 +804,26 @@ async function runProcess(command, args, options) {
 
 async function runModel(args) {
   const options = parseOptions(args, { boolean: ["help", "json"] });
-  const [subcommand = "list", ...rest] = options._;
   const root = workspaceRoot(options);
 
-  if (options.help || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
-    console.log(`Usage:
-  aiw model [list] [--root PATH] [--json]
-  aiw model show [--root PATH] [--json]
-  aiw model set-default <provider> <model> [--root PATH] [--json]
-`);
+  if (options.help) {
+    printModelHelp();
+    return;
+  }
+
+  // If no subcommand is specified, open interactive mode
+  if (options._.length === 0) {
+    if (!process.stdin.isTTY) {
+      throw new Error("Interactive mode requires a TTY terminal. Run 'aiw model list' or 'aiw model set-default'.");
+    }
+    await runModelInteractive(root);
+    return;
+  }
+
+  const [subcommand, ...rest] = options._;
+
+  if (subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
+    printModelHelp();
     return;
   }
 
@@ -848,6 +861,116 @@ async function runModel(args) {
     ["model", "MODEL", 30],
     ["source", "SOURCE", 12]
   ]);
+}
+
+function printModelHelp() {
+  console.log(`Usage:
+  aiw model [--root PATH] [--json]                      (Interactive selector)
+  aiw model list [--root PATH] [--json]
+  aiw model show [--root PATH] [--json]
+  aiw model set-default <provider> <model> [--root PATH] [--json]
+`);
+}
+
+async function runModelInteractive(root) {
+  const config = await readRuntimeConfig(root);
+  const currentProviderId = config.defaultModel?.provider;
+  const currentModelName = config.defaultModel?.model;
+
+  const providers = listProviderRegistry();
+  const providerItems = providers.map((p) => `${p.name} (${p.id})`);
+  
+  let defaultProviderIndex = providers.findIndex((p) => p.id === currentProviderId);
+  if (defaultProviderIndex === -1) defaultProviderIndex = 0;
+
+  const providerIndex = await interactiveSelect("Select a provider:", providerItems, defaultProviderIndex);
+  const selectedProvider = providers[providerIndex];
+
+  // List models for selected provider
+  const models = selectedProvider.models || [];
+  if (models.length === 0) {
+    console.log(`No curated models found for provider ${selectedProvider.name}.`);
+    const readlineInterface = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    const modelInput = await new Promise((resolve) => {
+      readlineInterface.question(`Enter model name: `, (answer) => {
+        readlineInterface.close();
+        resolve(answer.trim());
+      });
+    });
+    if (!modelInput) {
+      console.log("No model entered. Aborted.");
+      return;
+    }
+    const result = await setDefaultModel(root, selectedProvider.id, modelInput);
+    console.log(`Default model: ${result.provider}/${result.model}`);
+    return;
+  }
+
+  let defaultModelIndex = models.indexOf(currentModelName);
+  if (defaultModelIndex === -1) defaultModelIndex = 0;
+
+  const modelIndex = await interactiveSelect(`Select a model for ${selectedProvider.name}:`, models, defaultModelIndex);
+  const selectedModel = models[modelIndex];
+
+  const result = await setDefaultModel(root, selectedProvider.id, selectedModel);
+  console.log(`Default model: ${result.provider}/${result.model}`);
+}
+
+async function interactiveSelect(title, items, defaultIndex = 0) {
+  return new Promise((resolve) => {
+    let cursor = defaultIndex;
+    const stdout = process.stdout;
+    const stdin = process.stdin;
+
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode(true);
+    stdin.resume();
+    readline.emitKeypressEvents(stdin);
+
+    const render = () => {
+      stdout.write(`\r\x1b[36m? \x1b[1m\x1b[37m${title}\x1b[0m\n`);
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (i === cursor) {
+          stdout.write(`\x1b[36m> ${item}\x1b[0m\n`);
+        } else {
+          stdout.write(`  ${item}\n`);
+        }
+      }
+    };
+
+    const cleanup = () => {
+      stdout.write(`\x1b[${items.length + 1}A\x1b[0J`);
+      stdin.removeListener("keypress", onKeyPress);
+      if (stdin.isTTY) stdin.setRawMode(wasRaw);
+      stdin.pause();
+    };
+
+    const onKeyPress = (str, key) => {
+      if (key.ctrl && key.name === "c") {
+        cleanup();
+        process.exit(130);
+      }
+      if (key.name === "up" || key.name === "k") {
+        cursor = (cursor - 1 + items.length) % items.length;
+        stdout.write(`\x1b[${items.length + 1}A\x1b[0J`);
+        render();
+      } else if (key.name === "down" || key.name === "j") {
+        cursor = (cursor + 1) % items.length;
+        stdout.write(`\x1b[${items.length + 1}A\x1b[0J`);
+        render();
+      } else if (key.name === "return" || key.name === "enter") {
+        cleanup();
+        resolve(cursor);
+      }
+    };
+
+    stdin.on("keypress", onKeyPress);
+    render();
+  });
 }
 
 async function runProvider(args) {
