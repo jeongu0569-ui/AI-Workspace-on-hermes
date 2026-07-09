@@ -20,7 +20,7 @@ const OPENAI_COMPATIBLE_DEFAULTS = {
   custom: ""
 };
 
-export class OpenAICompatibleRuntimeAdapter extends EventEmitter {
+export class OpenAICompatibleRuntime extends EventEmitter {
   constructor({ workspaceRoot, env = process.env, fetchImpl = globalThis.fetch } = {}) {
     super();
     this.name = "ai-workspace-openai-compatible";

@@ -1,21 +1,21 @@
 import { ChatBackend } from "./chat-backend.mjs";
 
 export class RuntimeChatBackend extends ChatBackend {
-  constructor(runtimeAdapter) {
+  constructor(runtime) {
     super();
-    this.adapter = runtimeAdapter;
+    this.runtime = runtime;
   }
 
   async connect() {
-    await this.adapter.connect();
+    await this.runtime.connect();
   }
 
   async createSession(params) {
-    return await this.adapter.createSession(params);
+    return await this.runtime.createSession(params);
   }
 
   async resumeSession(sessionId) {
-    return await this.adapter.resumeSession(sessionId);
+    return await this.runtime.resumeSession(sessionId);
   }
 
   async submitPrompt(params) {
@@ -55,16 +55,16 @@ export class RuntimeChatBackend extends ChatBackend {
         };
 
         const cleanup = () => {
-          this.adapter.off("event", onEvent);
-          this.adapter.off("close", onClose);
-          this.adapter.off("error", onError);
+          this.runtime.off("event", onEvent);
+          this.runtime.off("close", onClose);
+          this.runtime.off("error", onError);
         };
 
-        this.adapter.on("event", onEvent);
-        this.adapter.on("close", onClose);
-        this.adapter.on("error", onError);
+        this.runtime.on("event", onEvent);
+        this.runtime.on("close", onClose);
+        this.runtime.on("error", onError);
 
-        this.adapter.submitPrompt(params).catch((err) => {
+        this.runtime.submitPrompt(params).catch((err) => {
           cleanup();
           reject(err);
         });
@@ -73,30 +73,30 @@ export class RuntimeChatBackend extends ChatBackend {
       return await replyPromise;
     }
 
-    return await this.adapter.submitPrompt(params);
+    return await this.runtime.submitPrompt(params);
   }
 
   async respondToApproval(params) {
-    return await this.adapter.respondToApproval(params);
+    return await this.runtime.respondToApproval(params);
   }
 
   async setAccessMode(sessionId, accessMode) {
-    await this.adapter.setAccessMode(sessionId, accessMode);
+    await this.runtime.setAccessMode(sessionId, accessMode);
   }
 
   async setReasoning(sessionId, reasoningEffort) {
-    await this.adapter.setReasoning(sessionId, reasoningEffort);
+    await this.runtime.setReasoning(sessionId, reasoningEffort);
   }
 
   close() {
-    this.adapter.close();
+    this.runtime.close();
   }
 }
 
 export class ChatRuntime {
-  constructor({ runtimeAdapter } = {}) {
-    if (runtimeAdapter) {
-      this.backend = new RuntimeChatBackend(runtimeAdapter);
+  constructor({ runtime } = {}) {
+    if (runtime) {
+      this.backend = new RuntimeChatBackend(runtime);
     } else {
       this.backend = null;
     }

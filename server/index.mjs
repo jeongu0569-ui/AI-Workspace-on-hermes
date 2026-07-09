@@ -15,7 +15,7 @@ import {
   acceptWebSocket,
   createFrameDecoder,
   encodeWebSocketFrame
-} from "./lib/hermes-live.mjs";
+} from "./lib/websocket-utils.mjs";
 import {
   createWorkspaceAgentEngine,
   ensureAgentWorkspaceState

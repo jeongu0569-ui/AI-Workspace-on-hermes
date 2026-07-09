@@ -8,13 +8,13 @@ import { ChatRuntime } from "./chat-runtime.mjs";
 import { ModelRuntime } from "./model-runtime.mjs";
 import { SessionRuntime } from "./session-runtime.mjs";
 import { LLMRuntime } from "./llm-runtime.mjs";
-import { OpenAICompatibleRuntimeAdapter } from "./runtime/openai-compatible-adapter.mjs";
+import { OpenAICompatibleRuntime } from "./runtime/openai-compatible-runtime.mjs";
 
 export function createWorkspaceAgentEngine(config) {
-  const runtimeAdapter = config.runtimeAdapter === undefined
-    ? new OpenAICompatibleRuntimeAdapter({ workspaceRoot: config.workspaceRoot })
-    : config.runtimeAdapter;
-  return new WorkspaceAgentEngine(config, runtimeAdapter || null);
+  const runtime = config.runtime === undefined
+    ? new OpenAICompatibleRuntime({ workspaceRoot: config.workspaceRoot })
+    : config.runtime;
+  return new WorkspaceAgentEngine(config, runtime || null);
 }
 
 export async function ensureAgentWorkspaceState(workspaceRoot) {
@@ -22,17 +22,17 @@ export async function ensureAgentWorkspaceState(workspaceRoot) {
 }
 
 export class WorkspaceAgentEngine extends EventEmitter {
-  constructor(config, runtimeAdapter) {
+  constructor(config, runtime) {
     super();
     this.config = config;
-    this.runtimeAdapter = runtimeAdapter;
+    this.runtime = runtime;
     
     this.state = new WorkspaceAgentStateStore(config.workspaceRoot);
     this.chatRuntime = new ChatRuntime({
-      runtimeAdapter: runtimeAdapter || null
+      runtime: runtime || null
     });
     this.modelRuntime = new ModelRuntime({ workspaceRoot: config.workspaceRoot });
-    this.sessionRuntime = new SessionRuntime({ runtimeAdapter, stateStore: this.state });
+    this.sessionRuntime = new SessionRuntime({ runtime, stateStore: this.state });
     this.llmRuntime = new LLMRuntime({ chatRuntime: this.chatRuntime });
     this.codeRuntime = new CodeAgentRuntime({
       workspaceRoot: config.workspaceRoot,
@@ -43,8 +43,8 @@ export class WorkspaceAgentEngine extends EventEmitter {
     this.persistedAssistantTurns = new Set();
     this.eventWrites = new Set();
 
-    if (this.runtimeAdapter) {
-      this.runtimeAdapter.on("event", (event) => {
+    if (this.runtime) {
+      this.runtime.on("event", (event) => {
         const enriched = {
           engine: "workspace-agent",
           adapter: this.adapterName(),
@@ -54,8 +54,8 @@ export class WorkspaceAgentEngine extends EventEmitter {
         this.trackEventWrite(this.state.recordAgentEvent(enriched));
         this.emit("event", enriched);
       });
-      this.runtimeAdapter.on("close", () => this.emit("close"));
-      this.runtimeAdapter.on("error", (error) => {
+      this.runtime.on("close", () => this.emit("close"));
+      this.runtime.on("error", (error) => {
         const enriched = {
           engine: "workspace-agent",
           adapter: this.adapterName(),
@@ -396,7 +396,7 @@ export class WorkspaceAgentEngine extends EventEmitter {
   }
 
   adapterName() {
-    return this.runtimeAdapter?.name || "ai-workspace-runtime";
+    return this.runtime?.name || "ai-workspace-runtime";
   }
 
   close() {

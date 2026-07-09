@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFrameDecoder, encodeWebSocketFrame } from "./hermes-live.mjs";
+import { createFrameDecoder, encodeWebSocketFrame } from "./websocket-utils.mjs";
+
 
 test("encodes server text frames", () => {
   const frame = encodeWebSocketFrame({ ok: true });

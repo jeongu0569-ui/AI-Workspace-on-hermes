@@ -6,10 +6,9 @@ import path from "node:path";
 import { createServer } from "node:http";
 import { CodeAgentRuntime, parseGitCommand } from "./code-agent-runtime.mjs";
 import { WorkspaceAgentStateStore } from "./agent-engine.mjs";
-import { acceptWebSocket, createFrameDecoder, encodeWebSocketFrame } from "./hermes-live.mjs";
+import { acceptWebSocket, createFrameDecoder, encodeWebSocketFrame } from "./websocket-utils.mjs";
 import { ChatRuntime } from "./chat-runtime.mjs";
 import { LLMRuntime, normalizePatchResponse } from "./llm-runtime.mjs";
-import { HermesLiveClient } from "./hermes-compat.mjs";
 
 test("parseGitCommand preserves quotes and partitions tokens correctly", () => {
   assert.deepEqual(parseGitCommand(`git commit -m "initial project build"`), [
@@ -44,7 +43,7 @@ test("LLMRuntime availability follows chat runtime backend availability", () => 
     on: () => {},
     off: () => {}
   };
-  const runtimeChat = new ChatRuntime({ runtimeAdapter: fakeCompat });
+  const runtimeChat = new ChatRuntime({ runtime: fakeCompat });
   const available = new LLMRuntime({ chatRuntime: runtimeChat });
   assert.equal(available.isAvailable(), true);
 });
@@ -320,152 +319,87 @@ async function fixtureCodeWorkspace() {
 }
 
 test("code agent runtime generates automatic patches using mock LLM server", async () => {
-  const server = createServer();
-  const wss = [];
-  
-  // Handle HTTP authentication & token requests
-  server.on("request", (req, res) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    res.setHeader("content-type", "application/json");
-    if (url.pathname === "/api/auth/providers") {
-      res.end(JSON.stringify({
-        providers: [{ name: "mock-password-provider", supports_password: true }]
-      }));
-    } else if (url.pathname === "/auth/password-login") {
-      res.setHeader("set-cookie", "session=mock-cookie-abc");
-      res.end(JSON.stringify({ ok: true }));
-    } else if (url.pathname === "/api/auth/ws-ticket") {
-      res.end(JSON.stringify({ ticket: "mock-ticket-123" }));
-    } else {
-      res.statusCode = 404;
-      res.end(JSON.stringify({ error: "Not Found" }));
-    }
-  });
-  
-  // Handle WebSocket upgraded connection
-  server.on("upgrade", (req, socket) => {
-    wss.push(socket);
-    acceptWebSocket(req, socket);
-    
-    const decode = createFrameDecoder((payloadStr) => {
-      try {
-        const payload = JSON.parse(payloadStr);
-        if (payload.method === "session.create") {
-          socket.write(encodeWebSocketFrame({
-            jsonrpc: "2.0",
-            id: payload.id,
-            result: { session_id: "mock-sess-1", stored_session_id: "mock-sess-1" }
-          }));
-        } else if (payload.method === "session.resume") {
-          socket.write(encodeWebSocketFrame({
-            jsonrpc: "2.0",
-            id: payload.id,
-            result: { session_id: "mock-sess-1" }
-          }));
-        } else if (payload.method === "config.set") {
-          socket.write(encodeWebSocketFrame({
-            jsonrpc: "2.0",
-            id: payload.id,
-            result: { ok: true }
-          }));
-        } else if (payload.method === "prompt.submit") {
-          socket.write(encodeWebSocketFrame({
-            jsonrpc: "2.0",
-            id: payload.id,
-            result: { ok: true }
-          }));
-          
-          const mockAnswer = JSON.stringify({
-            summary: "Mock automatic patch",
-            changes: [
-              {
-                path: "src/index.js",
-                find: "return 'hello';",
-                replace: "return 'auto-patched';"
-              }
-            ]
-          });
-          
-          socket.write(encodeWebSocketFrame({
-            jsonrpc: "2.0",
-            method: "event",
-            params: {
-              type: "message.delta",
-              text: mockAnswer,
-              payload: {
-                text: mockAnswer
-              }
-            }
-          }));
-          
-          socket.write(encodeWebSocketFrame({
-            jsonrpc: "2.0",
-            method: "event",
-            params: {
-              type: "message.done",
-              payload: {}
-            }
-          }));
-        }
-      } catch (err) {
-        console.error("Mock WebSocket parse err", err);
+  const root = await fixtureCodeWorkspace();
+  const state = new WorkspaceAgentStateStore(root);
+
+  const mockAnswer = JSON.stringify({
+    summary: "Mock automatic patch",
+    changes: [
+      {
+        path: "src/index.js",
+        find: "export function greeting() {\n  return 'hello';\n}\n",
+        replace: "export function greeting() {\n  return 'auto-patched';\n}\n"
       }
-    });
-    
-    socket.on("data", (chunk) => decode(chunk));
+    ]
   });
 
-  const port = await new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve(server.address().port);
-    });
+  const listeners = new Map();
+  const mockRuntime = {
+    connect: async () => {},
+    createSession: async (params) => ({ sessionId: "mock-sess-1", runtimeSessionId: "mock-sess-1" }),
+    resumeSession: async (id) => id,
+    submitPrompt: async (params) => {
+      const emit = (event, data) => {
+        const list = listeners.get(event) || [];
+        for (const cb of list) cb(data);
+      };
+
+      emit("event", {
+        sessionId: params.sessionId,
+        type: "message.delta",
+        text: mockAnswer
+      });
+      emit("event", {
+        sessionId: params.sessionId,
+        type: "message.done"
+      });
+
+      return {
+        ok: true,
+        sessionId: params.sessionId,
+        reply: mockAnswer
+      };
+    },
+    on(event, cb) {
+      if (!listeners.has(event)) listeners.set(event, []);
+      listeners.get(event).push(cb);
+    },
+    off(event, cb) {
+      if (!listeners.has(event)) return;
+      listeners.set(event, listeners.get(event).filter(l => l !== cb));
+    },
+    close() {}
+  };
+
+  const chatRuntime = new ChatRuntime({ runtime: mockRuntime });
+  const llmRuntime = new LLMRuntime({ chatRuntime });
+  const runtime = new CodeAgentRuntime({
+    workspaceRoot: root,
+    stateStore: state,
+    llmRuntime
   });
 
-  try {
-    const root = await fixtureCodeWorkspace();
-    const state = new WorkspaceAgentStateStore(root);
-    const chatRuntime = new ChatRuntime({
-      runtimeAdapter: new HermesLiveClient({
-        hermesServerUrl: `http://127.0.0.1:${port}`,
-        dashboardUsername: "test",
-        dashboardPassword: "test"
-      })
-    });
-    const llmRuntime = new LLMRuntime({ chatRuntime });
-    const runtime = new CodeAgentRuntime({
-      workspaceRoot: root,
-      stateStore: state,
-      llmRuntime
-    });
+  const result = await runtime.inspectTask({
+    scopePath: "Code/demo-app",
+    instruction: "Change the greeting renderer",
+    maxFiles: 20
+  });
 
-    const result = await runtime.inspectTask({
-      scopePath: "Code/demo-app",
-      instruction: "Change the greeting renderer",
-      maxFiles: 20
-    });
+  assert.equal(result.status, "inspected");
 
-    assert.equal(result.status, "inspected");
+  const patch = await runtime.generateAutomaticPatch(result.taskId);
+  assert.equal(patch.status, "patch_proposed");
+  assert.equal(patch.proposal.summary, "Mock automatic patch");
+  assert.equal(patch.proposal.changes[0].path, "Code/demo-app/src/index.js");
+  assert.equal(patch.proposal.changes[0].operation, "replace");
+  assert.ok(patch.proposal.changes[0].newHash);
 
-    const patch = await runtime.generateAutomaticPatch(result.taskId);
-    assert.equal(patch.status, "patch_proposed");
-    assert.equal(patch.proposal.summary, "Mock automatic patch");
-    assert.equal(patch.proposal.changes[0].path, "Code/demo-app/src/index.js");
-    assert.equal(patch.proposal.changes[0].operation, "replace");
-    assert.ok(patch.proposal.changes[0].newHash);
-
-    const proposedTask = JSON.parse(await fs.readFile(
-      path.join(root, ".ai-workspace", "tasks", `${result.taskId}.json`),
-      "utf8"
-    ));
-    assert.equal(proposedTask.status, "patch_proposed");
-    assert.equal(proposedTask.patchProposals[0].summary, "Mock automatic patch");
-
-  } finally {
-    for (const socket of wss) {
-      try { socket.destroy(); } catch {}
-    }
-    await new Promise((resolve) => server.close(resolve));
-  }
+  const proposedTask = JSON.parse(await fs.readFile(
+    path.join(root, ".ai-workspace", "tasks", `${result.taskId}.json`),
+    "utf8"
+  ));
+  assert.equal(proposedTask.status, "patch_proposed");
+  assert.equal(proposedTask.patchProposals[0].summary, "Mock automatic patch");
 });
 
 test("code agent runtime executes git commands with safety approvals", async () => {

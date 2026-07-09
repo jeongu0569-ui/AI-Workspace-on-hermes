@@ -3,17 +3,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { OpenAICompatibleRuntimeAdapter } from "./openai-compatible-adapter.mjs";
+import { OpenAICompatibleRuntime } from "./openai-compatible-runtime.mjs";
 import { setCredentialValue, setDefaultModel } from "./config-store.mjs";
 
-test("OpenAI-compatible adapter streams chat completions from AI Workspace config", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-adapter-"));
+test("OpenAI-compatible runtime streams chat completions from AI Workspace config", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-"));
   await setDefaultModel(root, "custom", "demo-model");
   await setCredentialValue(root, "custom", "AIW_CUSTOM_BASE_URL", "http://model.test/v1");
   await setCredentialValue(root, "custom", "AIW_CUSTOM_API_KEY", "test-key");
 
   let request = null;
-  const adapter = new OpenAICompatibleRuntimeAdapter({
+  const runtime = new OpenAICompatibleRuntime({
     workspaceRoot: root,
     fetchImpl: async (url, options) => {
       request = { url, options, body: JSON.parse(options.body) };
@@ -30,9 +30,9 @@ test("OpenAI-compatible adapter streams chat completions from AI Workspace confi
   });
 
   const events = [];
-  adapter.on("event", (event) => events.push(event));
+  runtime.on("event", (event) => events.push(event));
 
-  const result = await adapter.submitPrompt({
+  const result = await runtime.submitPrompt({
     sessionId: "session-1",
     message: "소개해줘",
     history: [
@@ -57,17 +57,17 @@ test("OpenAI-compatible adapter streams chat completions from AI Workspace confi
   assert.deepEqual(events.map((event) => event.type), ["turn.start", "message.delta", "message.delta", "turn.complete"]);
 });
 
-test("OpenAI-compatible adapter reports setup when no model is selected", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-adapter-missing-"));
-  const adapter = new OpenAICompatibleRuntimeAdapter({ workspaceRoot: root });
+test("OpenAI-compatible runtime reports setup when no model is selected", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-missing-"));
+  const runtime = new OpenAICompatibleRuntime({ workspaceRoot: root });
   await assert.rejects(
-    () => adapter.submitPrompt({ sessionId: "session-1", message: "hello" }),
+    () => runtime.submitPrompt({ sessionId: "session-1", message: "hello" }),
     /No default model is configured/
   );
 });
 
-test("OpenAI-compatible adapter executes workspace search tool calls", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-adapter-tools-"));
+test("OpenAI-compatible runtime executes workspace search tool calls", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-tools-"));
   await fs.mkdir(path.join(root, "Notes"), { recursive: true });
   await fs.writeFile(path.join(root, "Notes", "git.md"), "# Git\n\ngit pull brings remote changes.", "utf8");
   await setDefaultModel(root, "custom", "demo-model");
@@ -75,7 +75,7 @@ test("OpenAI-compatible adapter executes workspace search tool calls", async () 
   await setCredentialValue(root, "custom", "AIW_CUSTOM_API_KEY", "test-key");
 
   const requests = [];
-  const adapter = new OpenAICompatibleRuntimeAdapter({
+  const runtime = new OpenAICompatibleRuntime({
     workspaceRoot: root,
     fetchImpl: async (_url, options) => {
       requests.push(JSON.parse(options.body));
@@ -101,9 +101,9 @@ test("OpenAI-compatible adapter executes workspace search tool calls", async () 
   });
 
   const events = [];
-  adapter.on("event", (event) => events.push(event));
+  runtime.on("event", (event) => events.push(event));
 
-  const result = await adapter.submitPrompt({
+  const result = await runtime.submitPrompt({
     sessionId: "session-1",
     message: "git pull 관련 노트 있어?"
   });
