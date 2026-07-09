@@ -132,7 +132,8 @@ Client
   -> Workspace Server
   -> WorkspaceAgentEngine
      -> HermesAgentAdapter today
-     -> Codex-style CodeRuntime later
+     -> CodeAgentRuntime inspect loop today
+     -> Codex-style patch/test runtime later
 ```
 
 ## Notes Context Router
@@ -197,8 +198,14 @@ Full: Hermes yolo/full mode may bypass dangerous-command prompts.
 The client should show diffs and approvals before users trust automated code
 changes.
 
-The future code agent loop should live behind the same `WorkspaceAgentEngine`
-interface instead of being bolted directly to the client. A coding task should
-be recorded under `.ai-workspace/tasks`, tool activity under
-`.ai-workspace/tool-logs`, and produced patches/diffs under
+The code agent loop lives behind the same `WorkspaceAgentEngine` interface
+instead of being bolted directly to the client. The first `CodeAgentRuntime`
+implementation is inspect-only: it scans a `Code/` project, searches relevant
+files, detects package/test commands, records git status and diff output, and
+writes a task plan. A coding task is recorded under `.ai-workspace/tasks`, tool
+activity under `.ai-workspace/tool-logs`, decisions under
+`.ai-workspace/decisions`, and produced or captured diffs under
 `.ai-workspace/diffs`.
+
+Later patch/test execution should extend this runtime rather than adding a
+parallel code path.

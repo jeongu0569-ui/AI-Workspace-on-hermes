@@ -145,6 +145,12 @@ provider / model
 access_mode
 reasoning_effort
 result or error
+scope_path
+inspection
+search
+git.diff_ref
+plan
+decision_ref
 ```
 
 This is intentionally small. It does not yet replace Hermes conversation
@@ -152,11 +158,27 @@ history. It records the Workspace Server's own view of the work so future code
 agent loops can attach diffs, test results, shell output, approvals, and
 decision logs to the same task id.
 
-Future code-task records should add:
+The current code inspect task already adds:
+
+```text
+scope_path
+inspection.file_count
+inspection.files
+inspection.package
+inspection.markers
+inspection.suggested_check_commands
+search.results
+git.status
+git.diff_stat
+git.diff_ref
+plan.steps
+decision_ref
+```
+
+Future patch/test task records should add:
 
 ```text
 workspace_scope
-plan
 changed_files
 diff_refs
 test_commands

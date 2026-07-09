@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { HermesLiveClient } from "./hermes-live.mjs";
 import { buildWorkspaceContext } from "./context-router.mjs";
+import { CodeAgentRuntime } from "./code-agent-runtime.mjs";
 
 export function createWorkspaceAgentEngine(config) {
   return new WorkspaceAgentEngine(config, new HermesAgentAdapter(config.hermes));
@@ -19,6 +20,10 @@ export class WorkspaceAgentEngine extends EventEmitter {
     this.config = config;
     this.adapter = adapter;
     this.state = new WorkspaceAgentStateStore(config.workspaceRoot);
+    this.codeRuntime = new CodeAgentRuntime({
+      workspaceRoot: config.workspaceRoot,
+      stateStore: this.state
+    });
     this.eventWrites = new Set();
 
     this.adapter.on("event", (event) => {
@@ -150,6 +155,10 @@ export class WorkspaceAgentEngine extends EventEmitter {
       sessionId,
       reasoningEffort
     });
+  }
+
+  async inspectCodeTask(params = {}) {
+    return await this.codeRuntime.inspectTask(params);
   }
 
   async flush() {
@@ -299,6 +308,32 @@ export class WorkspaceAgentStateStore {
     }
   }
 
+  async recordToolLog(event) {
+    await this.ensure();
+    await this.appendJsonl("tool-logs/tool-events.jsonl", {
+      at: new Date().toISOString(),
+      ...definedFields(event)
+    });
+  }
+
+  async recordDecision(value) {
+    await this.ensure();
+    const record = {
+      at: new Date().toISOString(),
+      ...definedFields(value)
+    };
+    await this.appendJsonl("decisions/events.jsonl", record);
+    return { path: ".ai-workspace/decisions/events.jsonl", record };
+  }
+
+  async writeDiff(taskId, content) {
+    await this.ensure();
+    const fileName = `${safeArtifactName(taskId)}.diff`;
+    const filePath = path.join(this.root, "diffs", fileName);
+    await fs.writeFile(filePath, String(content || ""), "utf8");
+    return `.ai-workspace/diffs/${fileName}`;
+  }
+
   async readTask(taskId) {
     const text = await fs.readFile(this.taskPath(taskId), "utf8");
     return JSON.parse(text);
@@ -325,4 +360,8 @@ function definedFields(value) {
   return Object.fromEntries(
     Object.entries(value || {}).filter(([, item]) => item !== undefined && item !== null && item !== "")
   );
+}
+
+function safeArtifactName(value) {
+  return String(value || "artifact").replace(/[^a-zA-Z0-9_.-]/g, "-");
 }

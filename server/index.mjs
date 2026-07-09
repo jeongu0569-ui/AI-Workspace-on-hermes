@@ -63,15 +63,7 @@ function handleUpgrade(req, socket) {
 }
 
 function startLiveBridge(socket) {
-  const engine = createWorkspaceAgentEngine({
-    workspaceRoot: WORKSPACE_ROOT,
-    hermes: {
-      hermesServerUrl: HERMES_SERVER_URL,
-      dashboardUsername: HERMES_DASHBOARD_USERNAME,
-      dashboardPassword: HERMES_DASHBOARD_PASSWORD,
-      dashboardProvider: HERMES_DASHBOARD_PROVIDER
-    }
-  });
+  const engine = createAgentEngine();
   let closed = false;
   const send = (value) => {
     if (closed || socket.destroyed) return;
@@ -108,6 +100,18 @@ function startLiveBridge(socket) {
   send({ kind: "ready", service: "ai-workspace-live" });
 }
 
+function createAgentEngine() {
+  return createWorkspaceAgentEngine({
+    workspaceRoot: WORKSPACE_ROOT,
+    hermes: {
+      hermesServerUrl: HERMES_SERVER_URL,
+      dashboardUsername: HERMES_DASHBOARD_USERNAME,
+      dashboardPassword: HERMES_DASHBOARD_PASSWORD,
+      dashboardProvider: HERMES_DASHBOARD_PROVIDER
+    }
+  });
+}
+
 async function handleLiveCommand(engine, message) {
   const command = String(message.command || message.type || "");
   const params = message.params || {};
@@ -135,6 +139,9 @@ async function handleLiveCommand(engine, message) {
   if (command === "config.reasoning") {
     await engine.setReasoning(String(params.sessionId || ""), params.reasoningEffort);
     return { ok: true };
+  }
+  if (command === "code.task.create" || command === "code.inspect") {
+    return await engine.inspectCodeTask(params);
   }
   throw Object.assign(new Error(`Unknown live command: ${command}`), { status: 400 });
 }
@@ -227,6 +234,9 @@ async function handleRequest(req, res) {
     if (req.method === "POST" && url.pathname === "/api/search") {
       return sendJson(res, await runSearch(req));
     }
+    if (req.method === "POST" && url.pathname === "/api/agent/code-task") {
+      return sendJson(res, await createCodeTask(req), 201);
+    }
     if (req.method === "POST" && url.pathname === "/api/render/markdown") {
       return sendJson(res, await renderMarkdown(req));
     }
@@ -256,6 +266,13 @@ async function workspaceInfo() {
       serverUrl: HERMES_SERVER_URL,
       dashboardLoginConfigured: Boolean(HERMES_DASHBOARD_USERNAME && HERMES_DASHBOARD_PASSWORD)
     },
+    agent: {
+      engine: "workspace-agent",
+      statePath: ".ai-workspace",
+      adapters: ["hermes-live"],
+      runtimes: ["code-agent"],
+      codeTaskEndpoint: "/api/agent/code-task"
+    },
     search: searchStatus(WORKSPACE_ROOT)
   };
 }
@@ -269,6 +286,7 @@ async function readTree(url) {
   const children = await Promise.all(entries
     .filter((entry) => !entry.name.startsWith(".DS_Store"))
     .filter((entry) => !(relativePath === "" && entry.name === ".hermes-workspace"))
+    .filter((entry) => !(relativePath === "" && entry.name === ".ai-workspace"))
     .map(async (entry) => {
       const childRelativePath = joinWorkspacePath(relativePath, entry.name);
       const childAbsolutePath = path.join(absolutePath, entry.name);
@@ -472,6 +490,16 @@ async function resolveContext(req) {
 async function runSearch(req) {
   const body = await readJsonBody(req);
   return await searchWorkspace(WORKSPACE_ROOT, body);
+}
+
+async function createCodeTask(req) {
+  const body = await readJsonBody(req);
+  const engine = createAgentEngine();
+  try {
+    return await engine.inspectCodeTask(body);
+  } finally {
+    engine.close();
+  }
 }
 
 async function renderMarkdown(req) {

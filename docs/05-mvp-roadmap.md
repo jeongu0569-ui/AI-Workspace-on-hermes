@@ -146,16 +146,28 @@ Remaining:
 
 ## Phase 6: Code Workspace
 
-Status: planned.
+Status: in progress.
 
 - Project tree under `Code/`.
 - File viewer/editor.
 - Workspace Agent Engine coding-task creation.
-- Diff viewer.
-- Approval UI.
-- Git operation visibility.
+- CodeAgentRuntime inspect loop. Done at the server level through
+  `POST /api/agent/code-task` and live command `code.task.create`:
+  - validates that scope is under `Code/`
+  - scans project files while ignoring common build/cache folders
+  - searches relevant files with the current workspace search provider
+  - detects package markers and suggested check commands
+  - collects git status/diff information
+  - records task, decision, tool log, and diff artifacts under `.ai-workspace`
+- Git operation visibility. First read-only status/diff capture is done.
+- Diff artifacts. First captured git diff is written to `.ai-workspace/diffs`.
+
+Remaining:
+
+- Diff viewer in the Apple client.
+- Approval UI for code task patch/test execution.
 - Codex-style work loop:
-  - inspect files
+  - inspect files. Initial server pass done.
   - plan
   - patch
   - shell/test

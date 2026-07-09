@@ -130,6 +130,23 @@ Hermes 모델 목록 확인:
 curl http://127.0.0.1:8787/api/hermes/models
 ```
 
+Code Agent Runtime inspect task 확인:
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/agent/code-task \
+  -H 'content-type: application/json' \
+  --data '{
+    "scopePath": "Code/my-app",
+    "instruction": "이 프로젝트 구조를 보고 수정 계획을 만들어줘",
+    "maxFiles": 120
+  }'
+```
+
+이 API는 현재 파일을 수정하지 않는다. 대신 `Code/` 아래 프로젝트를 읽고,
+관련 파일 검색, git status/diff 수집, 추천 테스트 명령 탐지, 초기 plan 생성을
+수행한 뒤 `.ai-workspace/tasks`, `.ai-workspace/tool-logs`,
+`.ai-workspace/decisions`, `.ai-workspace/diffs`에 작업 기록을 남긴다.
+
 작은 파일 업로드 확인:
 
 ```bash

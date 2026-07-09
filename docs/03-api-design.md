@@ -15,7 +15,19 @@ Returns service health.
 ### `GET /api/workspace`
 
 Returns configured workspace root, top-level roots, and Hermes connection
-status.
+status. It also reports the active workspace agent engine capabilities:
+
+```json
+{
+  "agent": {
+    "engine": "workspace-agent",
+    "statePath": ".ai-workspace",
+    "adapters": ["hermes-live"],
+    "runtimes": ["code-agent"],
+    "codeTaskEndpoint": "/api/agent/code-task"
+  }
+}
+```
 
 ### `GET /api/tree?root=notes`
 
@@ -204,6 +216,70 @@ Future provider:
 ```text
 docsearch-mcp / vector index
 ```
+
+## Workspace Agent
+
+### `POST /api/agent/code-task`
+
+Starts the first Codex-style code task loop inside the Workspace Agent Engine.
+The current implementation is inspect-only: it reads the selected `Code/`
+project, searches relevant text files, collects git status/diff information,
+creates a task record, writes tool/decision logs, and returns an initial plan.
+It does not patch files or run tests yet.
+
+Request:
+
+```json
+{
+  "scopePath": "Code/my-app",
+  "instruction": "Change the greeting renderer",
+  "maxFiles": 120,
+  "maxSearchResults": 8
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "engine": "workspace-agent",
+  "runtime": "code-agent",
+  "taskId": "task-...",
+  "status": "inspected",
+  "scopePath": "Code/my-app",
+  "inspection": {
+    "fileCount": 42,
+    "suggestedCheckCommands": ["npm run test", "npm run build"]
+  },
+  "search": {
+    "provider": "workspace-scan",
+    "resultCount": 3
+  },
+  "git": {
+    "isRepository": true,
+    "status": "",
+    "diffStat": "",
+    "diffRef": ".ai-workspace/diffs/task-....diff"
+  },
+  "plan": {
+    "summary": "Code task prepared for Code/my-app. ...",
+    "steps": []
+  }
+}
+```
+
+Side effects under the workspace root:
+
+```text
+.ai-workspace/tasks/task-....json
+.ai-workspace/tasks/events.jsonl
+.ai-workspace/tool-logs/tool-events.jsonl
+.ai-workspace/decisions/events.jsonl
+.ai-workspace/diffs/task-....diff
+```
+
+The endpoint rejects scopes outside `Code/`.
 
 ## Hermes Proxy
 

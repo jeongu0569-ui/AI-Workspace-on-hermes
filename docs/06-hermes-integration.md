@@ -114,6 +114,12 @@ Workspace Server's own view of work: submitted prompts, context requests,
 session/config actions, and live tool events. Future code tasks can attach
 patches, diffs, test output, approvals, and decisions to the same task id.
 
+The first non-Hermes runtime is `CodeAgentRuntime`. It does not call Hermes and
+does not patch files yet. It starts a workspace-owned code task, inspects a
+`Code/` project, searches relevant files, records git status/diff output, and
+writes an initial plan under the same `.ai-workspace` state tree. This proves
+that the Workspace Agent Engine can host more than the Hermes live adapter.
+
 ## Why Workspace Server Should Bridge Hermes
 
 The client could connect directly to Hermes, but a server bridge is better:
