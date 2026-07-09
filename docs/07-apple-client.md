@@ -213,8 +213,6 @@ POST /api/agent/code-task/:id/patches/:proposalId/apply
 POST /api/agent/code-task/:id/patches/:proposalId/reject
 POST /api/agent/code-task/:id/checks
 POST /api/agent/code-task/:id/git
-GET  /api/config
-POST /api/config
 GET  /api/workspace/models
 GET  /api/workspace/sessions
 GET  /api/workspace/sessions/:id/messages

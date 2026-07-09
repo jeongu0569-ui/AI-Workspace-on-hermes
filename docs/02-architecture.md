@@ -2,7 +2,7 @@
 
 ## High-Level Shape
 
-Current shape (`aiw serve` standalone, Hermes fallback optional):
+Current shape (`aiw serve` workspace bridge + Hermes core wrapper):
 
 ```text
 iOS / macOS Client
@@ -16,18 +16,14 @@ aiw serve (Workspace Server)
         │   ├── diffs/, tool-logs/, memory/
         │   └── sessions/<id>.json
         └── WorkspaceAgentEngine
-            ├── ProviderRuntime   – provider list/add/remove
-            ├── AuthRuntime       – credential list/add/remove
-            ├── ModelRuntime      – model list, default selection
-            ├── SessionRuntime    – local sessions + hermes-compat merge
-            ├── ChatRuntime       – backend selection (WorkspaceChatBackend first)
-            │     ├── WorkspaceChatBackend  (default: direct OpenAI-compatible)
-            │     └── HermesCompatChatBackend (fallback if HERMES_SERVER_URL set)
-            ├── LLMRuntime        – structured LLM calls (patch generation)
+            ├── ChatRuntime       – Hermes live backend wrapper
+            ├── ModelRuntime      – Hermes model options wrapper
+            ├── SessionRuntime    – Hermes sessions + workspace summaries
+            ├── LLMRuntime        – structured LLM calls through Hermes
             └── CodeAgentRuntime  – task/patch/approval/git loop
 ```
 
-Final target shape (reached, pending docsearch RAG integration):
+Target shape:
 
 ```text
 iOS / macOS Client
@@ -36,9 +32,8 @@ iOS / macOS Client
 aiw serve
         │
         ├── Workspace Server
-        ├── Unified Engine
-        │   ├── Chat/session runtime
-        │   ├── Model/provider/auth registry
+        ├── Workspace Engine
+        │   ├── Hermes chat/session/model/provider/auth wrapper
         │   ├── Tool/MCP router
         │   ├── Notes/PDF context runtime
         │   └── CodeAgentRuntime
@@ -48,9 +43,11 @@ aiw serve
         └── Approval/safety gate
 ```
 
-`HERMES_SERVER_URL` is **optional**. When omitted the server runs in
-standalone mode and `WorkspaceChatBackend` handles all chat using provider /
-credential settings stored in `.ai-workspace/config.json`.
+Hermes remains the owner of model/provider/auth/codex/provider-plugin behavior.
+AI Workspace does not keep a parallel provider registry or credential store.
+When Hermes is unavailable, chat and automatic LLM patch generation are
+unavailable, while filesystem, search, task, diff, approval, and manual patch
+features continue to work.
 
 ## Why App → Workspace Server → Agent Engine
 
@@ -78,7 +75,6 @@ HermesWorkspace/Documents/os-book.pdf
 HermesWorkspace/Code/my-app/package.json
 HermesWorkspace/.ai-workspace/tasks/task-....json
 HermesWorkspace/.ai-workspace/sessions/<sessionId>.json
-HermesWorkspace/.ai-workspace/config.json
 ```
 
 The metadata DB should not replace files. It augments them:
@@ -113,47 +109,43 @@ C:/Users/user/secret.txt
 
 This is the most important early invariant.
 
-## hermes-compat Layer
+## Hermes Core Wrapper Layer
 
-`server/lib/hermes-compat.mjs` is a **legacy compatibility shim only**.
-It connects to an external Hermes Server via WebSocket when
-`HERMES_SERVER_URL` is defined. It is not used for standalone operation.
+`server/lib/hermes-compat.mjs` is the current Hermes wrapper boundary. It
+connects to Hermes `/api/ws`, uses dashboard auth when configured, forwards
+thinking/tool/approval/message events, and exposes session/model helpers.
 
-- `HermesCompatChatBackend` wraps `HermesLiveClient` with the `ChatBackend` interface.
-- `WorkspaceChatBackend` is the primary backend used when no Hermes URL is set.
-- `ChatRuntime` selects `WorkspaceChatBackend` by default; falls back to
-  `HermesCompatChatBackend` only when `HERMES_SERVER_URL` is configured.
+- `HermesCompatChatBackend` wraps `HermesLiveClient` with the `ChatBackend`
+  interface.
+- `ChatRuntime` uses this Hermes backend only. There is no direct
+  OpenAI-compatible fallback inside AI Workspace.
+- `ModelRuntime` reads Hermes model options instead of scanning workspace
+  provider settings.
+- `SessionRuntime` keeps workspace-friendly normalized session views but does
+  not replace Hermes session ownership.
 
-New workspace features must never be added to `hermes-compat.mjs`.
+Future work can replace the WebSocket compatibility boundary with a tighter
+in-process Hermes core integration, but it should still reuse Hermes'
+`hermes_cli` provider/auth/model implementation rather than cloning it.
 
-## Chat / Provider / Auth ownership
+## Chat / Provider / Auth Ownership
 
-Provider and credential settings are stored in `.ai-workspace/config.json`:
+Hermes owns:
 
-```json
-{
-  "providers": [
-    {
-      "id": "openai",
-      "type": "openai-compatible",
-      "baseUrl": "https://api.openai.com/v1",
-      "defaultModel": "gpt-4o"
-    }
-  ],
-  "defaultProvider": "openai",
-  "defaultModel": "gpt-4o"
-}
+```text
+hermes model
+hermes auth
+hermes config
+hermes_cli/providers.py
+hermes_cli/auth.py
+hermes_cli/runtime_provider.py
+plugins/model-providers/*
 ```
 
-API keys are stored separately in `.ai-workspace/credentials.json` and are
-masked in API responses. `AuthRuntime` and `ProviderRuntime` own this state.
-`WorkspaceChatBackend` reads these at request time.
-
-## Session Persistence
-
-`WorkspaceChatBackend` writes conversation history to
-`.ai-workspace/sessions/<sessionId>.json`. Each call to `submitPrompt` reads
-existing messages and appends new ones before calling the provider.
+AI Workspace owns task state and UI-facing workflow state, not model
+credentials. The `aiw model` and `aiw auth` commands delegate directly to
+Hermes. `aiw provider list` is read-only orientation output from Hermes'
+provider catalog; provider mutation stays in Hermes.
 
 ## Notes Context Router
 

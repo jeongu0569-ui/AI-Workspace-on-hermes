@@ -1,5 +1,3 @@
-import { WorkspaceChatBackend } from "./workspace-chat-backend.mjs";
-
 import { ChatBackend } from "./chat-backend.mjs";
 
 export class HermesCompatChatBackend extends ChatBackend {
@@ -96,11 +94,9 @@ export class HermesCompatChatBackend extends ChatBackend {
 }
 
 export class ChatRuntime {
-  constructor({ hermesCompat, stateStore, authRuntime, providerRuntime }) {
+  constructor({ hermesCompat } = {}) {
     if (hermesCompat) {
       this.backend = new HermesCompatChatBackend(hermesCompat);
-    } else if (stateStore && authRuntime && providerRuntime) {
-      this.backend = new WorkspaceChatBackend({ stateStore, authRuntime, providerRuntime });
     } else {
       this.backend = null;
     }
@@ -113,7 +109,7 @@ export class ChatRuntime {
   async connect() {
     if (!this.backend) {
       throw Object.assign(
-        new Error("Chat runtime is unavailable because no local model backend or Hermes compatibility backend is configured."),
+        new Error("Chat runtime is unavailable because Hermes runtime is not configured."),
         { status: 503 }
       );
     }
@@ -123,7 +119,7 @@ export class ChatRuntime {
   async createSession(params) {
     if (!this.backend) {
       throw Object.assign(
-        new Error("Chat runtime is unavailable because no local model backend or Hermes compatibility backend is configured."),
+        new Error("Chat runtime is unavailable because Hermes runtime is not configured."),
         { status: 503 }
       );
     }
@@ -133,7 +129,7 @@ export class ChatRuntime {
   async resumeSession(sessionId) {
     if (!this.backend) {
       throw Object.assign(
-        new Error("Chat runtime is unavailable because no local model backend or Hermes compatibility backend is configured."),
+        new Error("Chat runtime is unavailable because Hermes runtime is not configured."),
         { status: 503 }
       );
     }
@@ -143,7 +139,7 @@ export class ChatRuntime {
   async submitPrompt(params) {
     if (!this.backend) {
       throw Object.assign(
-        new Error("Chat runtime is unavailable because no local model backend or Hermes compatibility backend is configured."),
+        new Error("Chat runtime is unavailable because Hermes runtime is not configured."),
         { status: 503 }
       );
     }
@@ -153,7 +149,7 @@ export class ChatRuntime {
   async respondToApproval(params) {
     if (!this.backend) {
       throw Object.assign(
-        new Error("Chat runtime is unavailable because no local model backend or Hermes compatibility backend is configured."),
+        new Error("Chat runtime is unavailable because Hermes runtime is not configured."),
         { status: 503 }
       );
     }

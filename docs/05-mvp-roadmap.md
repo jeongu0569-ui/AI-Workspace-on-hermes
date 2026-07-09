@@ -21,12 +21,12 @@ Status: in progress.
 - AI Workspace CLI first pass. Done with `aiw` and `ai-workspace` package bins:
   - `aiw serve` starts the Workspace Server with friendly host/port/root/Hermes options.
   - `aiw status` checks Workspace/Hermes/search/agent status through the server API.
-  - `aiw model`, `aiw provider`, and `aiw auth` manage configuration directly via the server's Unified Engine config storage.
+  - `aiw model` and `aiw auth` delegate to Hermes; `aiw provider list` reads
+    Hermes' provider catalog for orientation only.
   - `aiw tasks`, `aiw code`, and `aiw index` expose the current workspace task,
     code task, patch/check, and search APIs.
-  - This is a transition layer. Final Unified Engine operation should keep
-    `aiw` as the user-facing command while removing the need for a separate
-    Hermes app/server/CLI in normal use.
+  - This keeps `aiw` as the user-facing command without creating a second
+    provider/auth/model implementation.
 
 Exit criteria:
 

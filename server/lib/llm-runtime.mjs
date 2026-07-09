@@ -4,8 +4,7 @@ export class LLMRuntime {
   }
 
   /**
-   * Returns true when the underlying chat runtime has a configured backend
-   * (either WorkspaceChatBackend or HermesCompatChatBackend).
+   * Returns true when the underlying chat runtime has a Hermes-backed backend.
    */
   isAvailable() {
     return Boolean(this.chatRuntime && this.chatRuntime.isAvailable());
@@ -14,7 +13,7 @@ export class LLMRuntime {
   async generateCodePatch(params) {
     if (!this.isAvailable()) {
       throw Object.assign(
-        new Error("Automatic patch generation requires a configured chat backend. Set up a provider first."),
+        new Error("Automatic patch generation requires Hermes runtime. Start/connect Hermes serve first."),
         { status: 503, setupRequired: true }
       );
     }

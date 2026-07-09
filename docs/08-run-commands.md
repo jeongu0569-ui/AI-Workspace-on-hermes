@@ -133,27 +133,28 @@ aiw status
 aiw status --json
 ```
 
-Hermes 모델/프로바이더/인증은 AI Workspace가 새로 구현하지 않고 Hermes CLI에
-그대로 위임한다. 이것은 현재 과도기 구현이다.
+Hermes 모델/프로바이더/인증은 AI Workspace가 새로 구현하지 않고 Hermes에
+그대로 맡긴다.
 
 ```bash
 aiw model
-aiw provider
+aiw provider list
 aiw auth
 ```
 
-즉 위 명령은 내부적으로 각각 `hermes model`, `hermes provider`,
-`hermes auth`를 실행하는 wrapper다. Hermes 실행 파일 이름이 다르면
-`HERMES_BIN`을 지정한다.
+`aiw model`은 `hermes model`을 실행하고, `aiw auth`는 `hermes auth`를
+실행한다. Hermes에는 별도 `hermes provider` 하위 명령이 없으므로
+`aiw provider list`는 Hermes의 provider catalog를 읽는 read-only 안내 명령이다.
+Provider 추가/변경/인증은 `hermes model`, `hermes auth`, `hermes config`에서
+처리한다. Hermes 실행 파일 이름이 다르면 `HERMES_BIN`을 지정한다.
 
 ```bash
 HERMES_BIN=/path/to/hermes aiw model
 ```
 
-최종 목표는 `aiw serve`만으로 Workspace Server와 Unified Engine 전체를 실행하는
-것이다. 그 단계에서는 사용자가 별도의 Hermes 앱, `hermes serve`, 또는 Hermes
-CLI를 직접 실행하지 않아도 된다. 현재 `aiw model/provider/auth` wrapper는 그
-전까지 사용자-facing 명령어를 `aiw`로 먼저 통일하기 위한 호환 계층이다.
+현재 목표는 `aiw serve`가 Workspace Server를 열고 Hermes core/live runtime을
+감싸는 것이다. AI Workspace는 provider/auth/model을 복제하지 않고, Hermes
+구현을 wrapper 경계 뒤에서 재사용한다.
 
 작업 기록 조회:
 

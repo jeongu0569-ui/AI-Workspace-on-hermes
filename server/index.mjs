@@ -249,46 +249,6 @@ async function handleRequest(req, res) {
     if (req.method === "POST" && url.pathname === "/api/context") {
       return sendJson(res, await resolveContext(req));
     }
-    if (req.method === "GET" && url.pathname === "/api/config") {
-      return sendJson(res, await getWorkspaceConfig());
-    }
-    if (req.method === "POST" && url.pathname === "/api/config") {
-      return sendJson(res, await updateWorkspaceConfig(req));
-    }
-    if (url.pathname === "/api/workspace/providers") {
-      if (req.method === "GET") {
-        return sendJson(res, await engine.providerRuntime.listProviders());
-      }
-      if (req.method === "POST") {
-        const body = await readJsonBody(req);
-        return sendJson(res, await engine.providerRuntime.addProvider(body.id, body), 201);
-      }
-    }
-    if (url.pathname.startsWith("/api/workspace/providers/")) {
-      const providerId = decodeURIComponent(url.pathname.slice("/api/workspace/providers/".length));
-      if (req.method === "PATCH") {
-        const body = await readJsonBody(req);
-        return sendJson(res, await engine.providerRuntime.updateProvider(providerId, body));
-      }
-      if (req.method === "DELETE") {
-        return sendJson(res, await engine.providerRuntime.removeProvider(providerId));
-      }
-    }
-    if (url.pathname === "/api/workspace/credentials") {
-      if (req.method === "GET") {
-        return sendJson(res, await engine.authRuntime.listCredentials());
-      }
-      if (req.method === "POST") {
-        const body = await readJsonBody(req);
-        return sendJson(res, await engine.authRuntime.addCredential(body), 201);
-      }
-    }
-    if (url.pathname.startsWith("/api/workspace/credentials/")) {
-      const credId = decodeURIComponent(url.pathname.slice("/api/workspace/credentials/".length));
-      if (req.method === "DELETE") {
-        return sendJson(res, await engine.authRuntime.removeCredential(credId));
-      }
-    }
     if (req.method === "GET" && url.pathname === "/api/search/status") {
       return sendJson(res, searchStatus(WORKSPACE_ROOT));
     }
@@ -401,6 +361,8 @@ async function handleRequest(req, res) {
 
 async function workspaceInfo() {
   const hasHermes = Boolean(HERMES_SERVER_URL);
+  const hermesStatus = await checkHermesReachability();
+  const hermesAvailable = hasHermes && hermesStatus.reachable;
   return {
     rootName: path.basename(WORKSPACE_ROOT),
     workspaceRoot: WORKSPACE_ROOT,
@@ -412,12 +374,12 @@ async function workspaceInfo() {
     hermes: {
       serverUrl: HERMES_SERVER_URL || "",
       dashboardLoginConfigured: Boolean(HERMES_DASHBOARD_USERNAME && HERMES_DASHBOARD_PASSWORD),
-      compatStatus: hasHermes ? "enabled" : "disabled",
-      reason: hasHermes ? "" : "HERMES_SERVER_URL is not configured"
+      compatStatus: hermesAvailable ? "enabled" : hasHermes ? "unreachable" : "disabled",
+      reason: hermesAvailable ? "" : hermesStatus.reason
     },
     chatRuntime: {
-      status: hasHermes ? "ok" : "unavailable",
-      reason: hasHermes ? "" : "HERMES_SERVER_URL is not configured"
+      status: hermesAvailable ? "ok" : "unavailable",
+      reason: hermesAvailable ? "" : hermesStatus.reason
     },
     agent: {
       engine: "workspace-agent",
@@ -434,6 +396,23 @@ async function workspaceInfo() {
     },
     search: searchStatus(WORKSPACE_ROOT)
   };
+}
+
+async function checkHermesReachability() {
+  if (!HERMES_SERVER_URL) {
+    return { reachable: false, reason: "HERMES_SERVER_URL is not configured" };
+  }
+  try {
+    const response = await fetch(`${HERMES_SERVER_URL}/api/status`, {
+      signal: AbortSignal.timeout(800)
+    });
+    if (response.ok || response.status === 401 || response.status === 403 || response.status === 404) {
+      return { reachable: true, reason: "", status: response.status };
+    }
+    return { reachable: false, reason: `Hermes server returned HTTP ${response.status}` };
+  } catch (error) {
+    return { reachable: false, reason: `Hermes server unreachable: ${error.message}` };
+  }
 }
 
 async function readTree(url) {
@@ -730,25 +709,6 @@ async function runCodeTaskGit(taskId, req) {
   const engine = createAgentEngine();
   try {
     return await engine.runCodeTaskGit(decodeURIComponent(taskId), body);
-  } finally {
-    engine.close();
-  }
-}
-
-async function getWorkspaceConfig() {
-  const engine = createAgentEngine();
-  try {
-    return await engine.getWorkspaceConfig();
-  } finally {
-    engine.close();
-  }
-}
-
-async function updateWorkspaceConfig(req) {
-  const body = await readJsonBody(req);
-  const engine = createAgentEngine();
-  try {
-    return await engine.updateWorkspaceConfig(body);
   } finally {
     engine.close();
   }

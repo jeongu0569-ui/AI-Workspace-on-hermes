@@ -4,12 +4,80 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "node:http";
-import { CodeAgentRuntime } from "./code-agent-runtime.mjs";
+import { CodeAgentRuntime, parseGitCommand } from "./code-agent-runtime.mjs";
 import { WorkspaceAgentStateStore } from "./agent-engine.mjs";
 import { acceptWebSocket, createFrameDecoder, encodeWebSocketFrame } from "./hermes-live.mjs";
 import { ChatRuntime } from "./chat-runtime.mjs";
-import { LLMRuntime } from "./llm-runtime.mjs";
+import { LLMRuntime, normalizePatchResponse } from "./llm-runtime.mjs";
 import { HermesLiveClient } from "./hermes-compat.mjs";
+
+test("parseGitCommand preserves quotes and partitions tokens correctly", () => {
+  assert.deepEqual(parseGitCommand(`git commit -m "initial project build"`), [
+    "git",
+    "commit",
+    "-m",
+    "initial project build"
+  ]);
+  assert.deepEqual(parseGitCommand("git status"), ["git", "status"]);
+  assert.deepEqual(parseGitCommand("git push origin 'feature/branch-name'"), [
+    "git",
+    "push",
+    "origin",
+    "feature/branch-name"
+  ]);
+});
+
+test("LLMRuntime availability follows Hermes chat runtime availability", () => {
+  const emptyChat = new ChatRuntime({});
+  const unavailable = new LLMRuntime({ chatRuntime: emptyChat });
+  assert.equal(unavailable.isAvailable(), false);
+
+  const fakeCompat = {
+    connect: async () => {},
+    createSession: async () => ({ sessionId: "fake", runtimeSessionId: "fake" }),
+    resumeSession: async () => "fake",
+    submitPrompt: async () => ({ ok: true }),
+    respondToApproval: async () => ({ ok: true }),
+    setAccessMode: async () => {},
+    setReasoning: async () => {},
+    close: () => {},
+    on: () => {},
+    off: () => {}
+  };
+  const hermesChat = new ChatRuntime({ hermesCompat: fakeCompat });
+  const available = new LLMRuntime({ chatRuntime: hermesChat });
+  assert.equal(available.isAvailable(), true);
+});
+
+test("normalizePatchResponse handles canonical, array, and write-op forms", () => {
+  const canonical = JSON.stringify({
+    summary: "Fix bug",
+    changes: [{ path: "src/a.js", find: "old", replace: "new" }]
+  });
+  const r1 = normalizePatchResponse(canonical, "fix");
+  assert.equal(r1.summary, "Fix bug");
+  assert.equal(r1.changes[0].find, "old");
+  assert.equal(r1.changes[0].replace, "new");
+
+  const arr = JSON.stringify([
+    { path: "src/b.js", targetContent: "x", replacementContent: "y" }
+  ]);
+  const r2 = normalizePatchResponse(arr, "update");
+  assert.equal(r2.changes[0].find, "x");
+  assert.equal(r2.changes[0].replace, "y");
+
+  const writeOp = JSON.stringify({
+    changes: [{ path: "src/c.js", operation: "write", content: "new file content" }]
+  });
+  const r3 = normalizePatchResponse(writeOp, "write");
+  assert.equal(r3.changes[0].operation, "write");
+  assert.equal(r3.changes[0].replace, "new file content");
+  assert.equal(r3.changes[0].find, "");
+
+  const wrapped = "```json\n" + canonical + "\n```";
+  const r4 = normalizePatchResponse(wrapped, "fix");
+  assert.equal(r4.summary, "Fix bug");
+});
 
 test("code agent runtime inspects a Code project and records artifacts", async () => {
   const root = await fixtureCodeWorkspace();
@@ -470,5 +538,3 @@ test("code agent runtime executes git commands with safety approvals", async () 
     /Shell metacharacters/
   );
 });
-
-

@@ -115,40 +115,12 @@ Deletes a file or folder.
 This endpoint exists for MVP development, but production UI should add undo or
 trash semantics before exposing it casually.
 
-### `GET /api/config`
+### Workspace Config Boundary
 
-Reads the unified workspace configuration (default model, provider endpoints, and auth credentials) from `.ai-workspace/config.json`.
-
-Response:
-
-```json
-{
-  "model": {
-    "default": "anthropic/claude-3-5-sonnet",
-    "provider": "anthropic"
-  },
-  "providers": {
-    "anthropic": {
-      "baseUrl": "https://api.anthropic.com/v1"
-    }
-  },
-  "credentials": [
-    {
-      "id": "cred-...",
-      "provider": "anthropic",
-      "apiKey": "sk-...",
-      "label": "My Anthropic Key"
-    }
-  ]
-}
-```
-
-### `POST /api/config`
-
-Updates the unified workspace configuration.
-
-Request Body:
-The full configuration JSON object to overwrite the configuration file.
+AI Workspace does not expose model/provider/auth configuration APIs. Hermes owns
+that state through `hermes model`, `hermes auth`, `hermes config`, and its
+provider plugins. Workspace APIs own files, context, search, tasks, approvals,
+diffs, and code runtime orchestration.
 
 ## Context Router
 
@@ -963,91 +935,30 @@ server work should treat `engine` and `adapter` as the more durable boundary.
 
 ---
 
-## Workspace-Owned Provider & Auth APIs
+## Model / Provider / Auth Boundary
 
-These endpoints are served by the Workspace Server itself. No Hermes connection
-is required.
+Workspace-owned provider and credential APIs were removed. Do not add:
 
-### `GET /api/workspace/providers`
-
-Returns the list of configured providers.
-
-Response:
-
-```json
-{
-  "providers": [
-    {
-      "id": "openai",
-      "type": "openai-compatible",
-      "baseUrl": "https://api.openai.com/v1",
-      "defaultModel": "gpt-4o"
-    }
-  ],
-  "defaultProvider": "openai"
-}
+```text
+GET/POST /api/config
+GET/POST /api/workspace/providers
+PATCH/DELETE /api/workspace/providers/:id
+GET/POST /api/workspace/credentials
+DELETE /api/workspace/credentials/:id
+POST /api/workspace/models/default
 ```
 
-### `POST /api/workspace/providers`
+Use Hermes instead:
 
-Adds a new provider.
-
-Body:
-
-```json
-{
-  "id": "ollama",
-  "type": "openai-compatible",
-  "baseUrl": "http://localhost:11434/v1",
-  "defaultModel": "llama3"
-}
+```text
+aiw model  -> hermes model
+aiw auth   -> hermes auth
+aiw provider list -> read-only Hermes provider catalog
 ```
-
-### `DELETE /api/workspace/providers/:id`
-
-Removes a provider by ID.
-
----
-
-### `GET /api/workspace/credentials`
-
-Lists credentials (API keys are masked).
-
-Response:
-
-```json
-{
-  "credentials": [
-    { "providerId": "openai", "maskedKey": "sk-...ABCD", "updatedAt": "..." }
-  ]
-}
-```
-
-### `POST /api/workspace/credentials`
-
-Stores a credential. Body:
-
-```json
-{ "providerId": "openai", "apiKey": "sk-..." }
-```
-
-### `DELETE /api/workspace/credentials/:providerId`
-
-Removes a stored credential.
-
----
 
 ### `GET /api/workspace/models`
 
-Returns the merged model list (workspace config + hermes-compat if connected).
-
-### `POST /api/workspace/models/default`
-
-Sets the default model. Body:
-
-```json
-{ "model": "gpt-4o", "provider": "openai" }
-```
+Returns the Hermes model list through the Workspace Server wrapper.
 
 ---
 

@@ -10,7 +10,7 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const SERVER_ENTRY = path.join(REPO_ROOT, "server", "index.mjs");
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8787";
 const DEFAULT_WORKSPACE_ROOT = path.join(os.homedir(), "HermesWorkspace");
-const HERMES_WRAPPER_COMMANDS = new Set();
+const HERMES_WRAPPER_COMMANDS = new Set(["model", "auth"]);
 
 main(process.argv.slice(2)).catch((error) => {
   console.error(`aiw: ${error.message}`);
@@ -69,19 +69,18 @@ function printHelp() {
 Usage:
   aiw serve [--host 0.0.0.0] [--port 8787] [--root PATH] [--hermes URL]
   aiw status [--url URL] [--json]
-  aiw model [show|list|set-default] [...]
-  aiw provider [list|add|update|remove] [...]
-  aiw auth [list|set|add|remove] [...]
+  aiw model [...]                         -> hermes model [...]
+  aiw provider [list|help]                -> read Hermes provider registry
+  aiw auth [...]                          -> hermes auth [...]
   aiw approvals [list|show|approve|reject] [...]
   aiw tasks [list|show] [...]
   aiw code <list|create|show|patch|apply|reject|check> [...]
   aiw index <status|search> [...]
 
-Quick start (standalone, no Hermes):
+Quick start:
   aiw serve
-  aiw provider add ollama --type openai-compatible --base-url http://127.0.0.1:11434/v1 --no-api-key
-  aiw model set-default ollama qwen2.5-coder:latest --provider ollama
-  aiw auth set openai --api-key sk-...
+  aiw model
+  aiw auth list
 
 Aliases:
   ai-workspace is the long-form alias for aiw.
@@ -89,7 +88,7 @@ Aliases:
 Environment:
   AIW_SERVER_URL          Workspace Server URL for API commands
   HERMES_WORKSPACE_ROOT   Workspace root used by aiw serve/tasks
-  HERMES_SERVER_URL       Optional Hermes server URL for legacy compat mode
+  HERMES_SERVER_URL       Hermes serve URL used by the workspace bridge
 `);
 }
 
@@ -817,247 +816,167 @@ async function runProcess(command, args, options) {
 }
 
 async function runModel(args) {
-  const options = parseOptions(args, { boolean: ["help", "json"] });
-  const [subcommand = "show", modelName] = options._;
-
-  if (options.help || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
-    console.log(`Usage:
-  aiw model [show] [--url URL] [--json]
-  aiw model list [--url URL] [--json]
-  aiw model set <modelName> [--provider <provider>] [--url URL]
-  aiw model set-default <modelName> [--provider <provider>] [--url URL]
-`);
-    return;
-  }
-
-  const baseUrl = workspaceUrl(options);
-
-  if (subcommand === "show") {
-    const config = await requestJson(baseUrl, "/api/config");
-    if (options.json) {
-      printJson(config.model || {});
-      return;
-    }
-    console.log(`Default Model   : ${config.model?.default || "(none)"}`);
-    console.log(`Default Provider: ${config.model?.provider || "(none)"}`);
-  } else if (subcommand === "list") {
-    const result = await requestJson(baseUrl, "/api/workspace/models");
-    if (options.json) {
-      printJson(result.models || []);
-      return;
-    }
-    const models = result.models || [];
-    if (!models.length) {
-      console.log("No models detected or configuration required.");
-      return;
-    }
-    const rows = models.map(m => ({
-      id: m.id,
-      name: m.name,
-      provider: m.provider,
-      source: m.source,
-      status: m.isActive ? "ACTIVE" : ""
-    }));
-    printTable(rows, [
-      ["id", "MODEL ID", 28],
-      ["provider", "PROVIDER", 16],
-      ["source", "SOURCE", 22],
-      ["status", "STATUS", 10]
-    ]);
-  } else if (subcommand === "set" || subcommand === "set-default" || (subcommand && subcommand !== "show" && subcommand !== "list" && !modelName)) {
-    const targetModel = (subcommand === "set" || subcommand === "set-default") ? modelName : subcommand;
-    if (!targetModel) throw new Error("Usage: aiw model set-default <modelName> [--provider <provider>]");
-    
-    const config = await requestJson(baseUrl, "/api/config");
-    if (!config.model) config.model = {};
-    config.model.default = targetModel;
-    if (options.provider) {
-      config.model.provider = stringOption(options.provider);
-    } else {
-      const parts = targetModel.split("/");
-      if (parts.length > 1) {
-        config.model.provider = parts[0];
-      }
-    }
-
-    await requestJson(baseUrl, "/api/config", {
-      method: "POST",
-      body: config
-    });
-    console.log(`Updated default model to: ${targetModel} (${config.model.provider || "unknown provider"})`);
-  } else {
-    throw new Error(`Unknown model subcommand '${subcommand}'.`);
-  }
+  await runHermes("model", args);
 }
 
 async function runProvider(args) {
-  const options = parseOptions(args, { boolean: ["help", "json", "no-api-key"] });
-  const [subcommand = "list", providerName] = options._;
+  const options = parseOptions(args, { boolean: ["help", "json"] });
+  const [subcommand = "list"] = options._;
 
   if (options.help || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
     console.log(`Usage:
-  aiw provider list [--url URL] [--json]
-  aiw provider add <name> --type openai-compatible --base-url <url> [--no-api-key] [--url URL]
-  aiw provider update <name> [--base-url <url>] [--type <type>] [--no-api-key] [--url URL]
-  aiw provider remove <name> [--url URL]
+  aiw provider list [--json]
 
-Examples:
-  aiw provider add ollama --type openai-compatible --base-url http://127.0.0.1:11434/v1 --no-api-key
-  aiw provider add lmstudio --type openai-compatible --base-url http://127.0.0.1:1234/v1 --no-api-key
-  aiw provider add openai --type openai-compatible --base-url https://api.openai.com/v1
-  aiw provider update openai --base-url https://api.openai.com/v1
-  aiw provider remove ollama
+AI Workspace does not own provider creation. Hermes owns providers through:
+  hermes model
+  hermes auth
+  hermes config
+
+This command reads Hermes' provider registry for orientation only.
 `);
     return;
   }
 
-  const baseUrl = workspaceUrl(options);
-
   if (subcommand === "list") {
-    const providers = await requestJson(baseUrl, "/api/workspace/providers");
+    const providers = await readHermesProviderCatalog();
     if (options.json) {
       printJson(providers);
       return;
     }
     if (!providers.length) {
-      console.log("No providers configured. Use 'aiw provider add' to add one.");
+      console.log("No Hermes providers could be read.");
       return;
     }
     const rows = providers.map((item) => ({
-      provider: item.id,
-      type: item.type || "openai-compatible",
-      url: item.baseUrl || "",
-      apiKey: item.apiKeyRequired === false ? "not required" : "required"
+      provider: item.slug,
+      label: item.label || item.slug,
+      auth: item.authType || "",
+      transport: item.transport || ""
     }));
     printTable(rows, [
       ["provider", "PROVIDER", 18],
-      ["type", "TYPE", 20],
-      ["url", "BASE URL", 36],
-      ["apiKey", "API KEY", 14]
+      ["label", "LABEL", 28],
+      ["auth", "AUTH", 18],
+      ["transport", "TRANSPORT", 20]
     ]);
-  } else if (subcommand === "add") {
-    const name = providerName;
-    const providerBaseUrl = stringOption(options["base-url"]) || stringOption(options["base_url"]) || stringOption(options.baseUrl);
-    const type = stringOption(options.type) || "openai-compatible";
-    const apiKeyRequired = options["no-api-key"] ? false : true;
-    if (!name) throw new Error("Usage: aiw provider add <name> --base-url <url>");
-    if (!providerBaseUrl) throw new Error("Usage: aiw provider add <name> --base-url <url>");
-    await requestJson(baseUrl, "/api/workspace/providers", {
-      method: "POST",
-      body: { id: name, type, baseUrl: providerBaseUrl, apiKeyRequired }
-    });
-    console.log(`Provider '${name}' added (${type}, ${providerBaseUrl}, apiKey: ${apiKeyRequired ? "required" : "not required"})`);
-  } else if (subcommand === "update") {
-    const name = providerName;
-    if (!name) throw new Error("Usage: aiw provider update <name> [--base-url <url>] [--type <type>]");
-    const patch = {};
-    const providerBaseUrl = stringOption(options["base-url"]) || stringOption(options["base_url"]) || stringOption(options.baseUrl);
-    if (providerBaseUrl) patch.baseUrl = providerBaseUrl;
-    if (options.type) patch.type = stringOption(options.type);
-    if (options["no-api-key"]) patch.apiKeyRequired = false;
-    await requestJson(baseUrl, `/api/workspace/providers/${encodeURIComponent(name)}`, {
-      method: "PATCH",
-      body: patch
-    });
-    console.log(`Provider '${name}' updated.`);
-  } else if (subcommand === "remove") {
-    const name = providerName;
-    if (!name) throw new Error("Usage: aiw provider remove <name>");
-    await requestJson(baseUrl, `/api/workspace/providers/${encodeURIComponent(name)}`, {
-      method: "DELETE"
-    });
-    console.log(`Provider '${name}' removed.`);
   } else {
-    // Legacy: treat unknown subcommand as provider name to set URL
-    const targetProvider = subcommand;
-    const providerUrlValue = stringOption(options["provider-url"]) || stringOption(options.providerUrl) || stringOption(options["base-url"]);
-    if (!targetProvider || !providerUrlValue) {
-      throw new Error("Unknown provider subcommand. Run 'aiw provider help' for usage.");
-    }
-    await requestJson(baseUrl, "/api/workspace/providers", {
-      method: "POST",
-      body: { id: targetProvider, baseUrl: providerUrlValue, type: "openai-compatible" }
-    });
-    console.log(`Set provider '${targetProvider}' base URL to: ${providerUrlValue}`);
+    throw new Error("Provider mutation is owned by Hermes. Use 'hermes model', 'hermes auth', or 'hermes config'.");
   }
 }
 
 async function runAuth(args) {
-  const options = parseOptions(args, { boolean: ["help", "json"] });
-  const [subcommand = "list", targetId] = options._;
+  await runHermes("auth", args);
+}
 
-  if (options.help || subcommand === "help" || subcommand === "--help" || subcommand === "-h") {
-    console.log(`Usage:
-  aiw auth list [--url URL] [--json]
-  aiw auth add --provider <provider> --key <key> [--label <label>] [--url URL]
-  aiw auth set <provider> --api-key <key> [--url URL]     (alias for add)
-  aiw auth remove <credentialId> [--url URL]
-
-Examples:
-  aiw auth set openai --api-key sk-...
-  aiw auth add anthropic --provider anthropic --key sk-ant-...
-  aiw auth list
-  aiw auth remove cred-abc123
-`);
-    return;
+async function readHermesProviderCatalog() {
+  const python = await findHermesPython();
+  if (python) {
+    const code = `
+import json
+from hermes_cli.provider_catalog import provider_catalog
+rows = []
+for item in provider_catalog():
+    rows.append({
+        "slug": getattr(item, "slug", "") or getattr(item, "name", ""),
+        "label": getattr(item, "label", "") or getattr(item, "display_name", ""),
+        "authType": getattr(item, "auth_type", ""),
+        "transport": getattr(item, "transport", ""),
+    })
+print(json.dumps(rows, ensure_ascii=False))
+`;
+    try {
+      const output = await runProcessCapture(python, ["-c", code], {
+        cwd: process.cwd(),
+        env: process.env
+      });
+      const parsed = JSON.parse(output || "[]");
+      if (Array.isArray(parsed)) return parsed.filter((item) => item.slug);
+    } catch {
+      // Fall through to the filesystem scan below.
+    }
   }
 
-  const baseUrl = workspaceUrl(options);
+  const root = await findHermesAgentRoot();
+  if (!root) return [];
+  const providersDir = path.join(root, "plugins", "model-providers");
+  let entries = [];
+  try {
+    entries = await fs.readdir(providersDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const rows = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const yamlPath = path.join(providersDir, entry.name, "plugin.yaml");
+    let yaml = "";
+    try {
+      yaml = await fs.readFile(yamlPath, "utf8");
+    } catch {
+      // Missing plugin metadata is not fatal for orientation output.
+    }
+    rows.push({
+      slug: entry.name,
+      label: yaml.match(/^description:\s*(.+)$/m)?.[1]?.trim() || entry.name,
+      authType: "",
+      transport: ""
+    });
+  }
+  return rows.sort((a, b) => a.slug.localeCompare(b.slug));
+}
 
-  if (subcommand === "list") {
-    const credentials = await requestJson(baseUrl, "/api/workspace/credentials");
-    if (options.json) {
-      printJson(credentials);
-      return;
-    }
-    if (!credentials.length) {
-      console.log("No credentials registered. Use 'aiw auth set <provider> --api-key <key>' to add one.");
-      return;
-    }
-    printTable(credentials, [
-      ["id", "CREDENTIAL ID", 24],
-      ["provider", "PROVIDER", 16],
-      ["label", "LABEL", 24],
-      ["apiKey", "API KEY", 22]
-    ]);
-  } else if (subcommand === "add" || subcommand === "set") {
-    // 'set' form: aiw auth set <provider> --api-key <key>
-    // 'add' form: aiw auth add --provider <provider> --key <key>
-    let provider, key, label;
-    if (subcommand === "set") {
-      provider = targetId;
-      key = stringOption(options["api-key"]) || stringOption(options["apiKey"]) || stringOption(options.key);
-      label = stringOption(options.label) || "CLI Set";
-      if (!provider) throw new Error("Usage: aiw auth set <provider> --api-key <key>");
-      if (!key) throw new Error("Usage: aiw auth set <provider> --api-key <key>");
-    } else {
-      provider = stringOption(options.provider);
-      key = stringOption(options.key) || stringOption(options["api-key"]) || stringOption(options.apiKey);
-      label = stringOption(options.label) || "CLI Add";
-      if (!provider || !key) {
-        throw new Error("Usage: aiw auth add --provider <provider> --key <key>");
+async function findHermesPython() {
+  if (process.env.HERMES_PYTHON) return process.env.HERMES_PYTHON;
+  const root = await findHermesAgentRoot();
+  if (!root) return "";
+  const candidate = path.join(root, "venv", "bin", "python");
+  try {
+    await fs.access(candidate);
+    return candidate;
+  } catch {
+    return "";
+  }
+}
+
+async function findHermesAgentRoot() {
+  if (process.env.HERMES_AGENT_ROOT) return expandHome(process.env.HERMES_AGENT_ROOT);
+  const defaultRoot = path.join(os.homedir(), ".hermes", "hermes-agent");
+  try {
+    await fs.access(path.join(defaultRoot, "hermes_cli"));
+    return defaultRoot;
+  } catch {
+    return "";
+  }
+}
+
+async function runProcessCapture(command, args, options) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        reject(new Error(`${command} exited with signal ${signal}`));
+        return;
       }
-    }
-
-    const result = await requestJson(baseUrl, "/api/workspace/credentials", {
-      method: "POST",
-      body: { provider, apiKey: key, label }
+      if (code) {
+        reject(new Error(stderr.trim() || `${command} exited with code ${code}`));
+        return;
+      }
+      resolve(stdout.trim());
     });
-    console.log(`Credential added: ${result.id} for provider '${provider}' (${result.apiKey})`);
-  } else if (subcommand === "remove") {
-    const idToRemove = targetId;
-    if (!idToRemove) throw new Error("Usage: aiw auth remove <credentialId>");
-    await requestJson(baseUrl, `/api/workspace/credentials/${encodeURIComponent(idToRemove)}`, {
-      method: "DELETE"
-    });
-    console.log(`Credential removed: ${idToRemove}`);
-  } else {
-    // Legacy: bare credential ID as subcommand
-    const idToRemove = subcommand;
-    if (!idToRemove) throw new Error("Unknown auth subcommand. Run 'aiw auth help'.");
-    await requestJson(baseUrl, `/api/workspace/credentials/${encodeURIComponent(idToRemove)}`, {
-      method: "DELETE"
-    });
-    console.log(`Credential removed: ${idToRemove}`);
-  }
+  });
 }

@@ -137,29 +137,36 @@ This proves that the Workspace Agent Engine can host more than the Hermes live
 adapter while still leaving Hermes responsible for the general chat/model/MCP
 layer.
 
-## Unified Engine Direction
+## Hermes Core Wrapper Direction
 
-The current Hermes integration is transitional. It exists so the app can reuse
-Hermes live chat, provider configuration, authentication, tools, and MCP while
-the Workspace-owned engine grows.
+The current Hermes integration is not a temporary fallback to replace with a
+new provider/auth/model system. Hermes remains the source of truth for live
+chat, provider configuration, authentication, Codex provider behavior, Google
+Antigravity behavior, tools, and MCP.
 
-The final product direction is:
+The product direction is:
 
 ```text
 aiw serve
   -> Workspace Server
-  -> Unified Engine
-  -> model/provider/auth/session/tool/code/index runtimes
+  -> Workspace Engine
+  -> Hermes core/live wrapper for chat/model/provider/auth/tool sessions
+  -> Workspace-owned task/memory/diff/search/approval/code runtimes
 ```
 
-### Hermes Server Dependency Elimination Roadmap
+### Wrapper Roadmap
 
-To fully transition into a self-contained AI Workspace Unified Engine and eliminate the need for `HERMES_SERVER_URL` and Hermes Desktop processes, the following staged migration plan is established:
-
-- **Stage 1 (Completed)**: Separate execution dependencies. Refactored `HermesAgentAdapter` out of the codebase and isolated live proxy routes into three clean modules: `ChatRuntime`, `ModelRuntime`, and `SessionRuntime`. The legacy live client was moved into a fallback compatibility layer (`hermes-compat.mjs`). Overrode `aiw model`, `aiw provider`, and `aiw auth` commands to read and write config parameters directly using Unified Engine configuration APIs without calling out to any external Hermes binary execution wrapper.
-- **Stage 2 (Short-term)**: Adopt lightweight local LLM wrappers. Implement support for direct OpenAI/Anthropic SDK or locally hosted Ollama/Llama.cpp endpoints directly inside `ChatRuntime` and `ModelRuntime`, bypassing `HermesLiveClient` entirely if a specific model adapter is selected.
-- **Stage 3 (Medium-term)**: Native SQLite state store integration. Replace proxy session histories with a direct Workspace-owned SQLite session database inside the `.ai-workspace` directory. This allows local chat threads and coding task memory to be queries across the same repository history without syncing with external servers.
-- **Stage 4 (Long-term)**: Native MCP host engine internalization. Absorb MCP tool registration and stream orchestration directly inside the `ToolRuntime` and Unified Workspace Server. Once complete, `aiw serve` runs the workspace interface, coding loops, and LLM orchestration entirely in a single, lightweight Node process, requiring no external Hermes installation or network endpoint dependency whatsoever.
+- **Stage 1 (current)**: Keep `hermes-compat.mjs` as the WebSocket/REST wrapper
+  around `hermes serve`. `ChatRuntime`, `ModelRuntime`, and `SessionRuntime`
+  call Hermes through this boundary.
+- **Stage 2**: Add a formal `HermesCoreRuntime` module if deeper integration is
+  needed. It should import/call Hermes Python modules behind one boundary
+  instead of copying provider/auth/model logic.
+- **Stage 3**: Move provider-specific additions, including Google Antigravity,
+  into Hermes' provider/plugin structure. AI Workspace should only expose the
+  selected provider/model through Hermes APIs.
+- **Stage 4**: Keep `.ai-workspace` focused on workspace state: tasks,
+  approvals, diffs, tool logs, decisions, index metadata, and code task memory.
 
 ## Why Workspace Server Should Bridge Hermes
 

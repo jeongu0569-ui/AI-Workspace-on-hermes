@@ -8,8 +8,6 @@ import { CodeAgentRuntime } from "./code-agent-runtime.mjs";
 import { ChatRuntime } from "./chat-runtime.mjs";
 import { ModelRuntime } from "./model-runtime.mjs";
 import { SessionRuntime } from "./session-runtime.mjs";
-import { ProviderRuntime } from "./provider-runtime.mjs";
-import { AuthRuntime } from "./auth-runtime.mjs";
 import { LLMRuntime } from "./llm-runtime.mjs";
 
 export function createWorkspaceAgentEngine(config) {
@@ -30,15 +28,10 @@ export class WorkspaceAgentEngine extends EventEmitter {
     this.compat = compat;
     
     this.state = new WorkspaceAgentStateStore(config.workspaceRoot);
-    this.providerRuntime = new ProviderRuntime({ stateStore: this.state });
-    this.authRuntime = new AuthRuntime({ stateStore: this.state });
     this.chatRuntime = new ChatRuntime({
-      hermesCompat: compat?.config?.hermesServerUrl ? compat : null,
-      stateStore: this.state,
-      authRuntime: this.authRuntime,
-      providerRuntime: this.providerRuntime
+      hermesCompat: compat || null
     });
-    this.modelRuntime = new ModelRuntime({ hermesCompat: compat, stateStore: this.state });
+    this.modelRuntime = new ModelRuntime({ hermesCompat: compat });
     this.sessionRuntime = new SessionRuntime({ hermesCompat: compat, stateStore: this.state });
     this.llmRuntime = new LLMRuntime({ chatRuntime: this.chatRuntime });
     this.codeRuntime = new CodeAgentRuntime({
@@ -249,15 +242,6 @@ export class WorkspaceAgentEngine extends EventEmitter {
 
   async rejectCodeTaskPatch(taskId, params = {}) {
     return await this.codeRuntime.rejectPatch(taskId, params);
-  }
-
-  async getWorkspaceConfig() {
-    return await this.state.readConfig();
-  }
-
-  async updateWorkspaceConfig(config) {
-    await this.state.writeConfig(config);
-    return { ok: true };
   }
 
   async listModels() {
@@ -686,36 +670,6 @@ export class WorkspaceAgentStateStore {
     );
   }
 
-  async readConfig() {
-    await this.ensure();
-    const filePath = path.join(this.root, "config.json");
-    try {
-      const data = await fs.readFile(filePath, "utf8");
-      return JSON.parse(data);
-    } catch (error) {
-      if (error.code === "ENOENT") {
-        return {
-          model: {
-            default: "anthropic/claude-3-5-sonnet",
-            provider: "anthropic"
-          },
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com/v1"
-            }
-          },
-          credentials: []
-        };
-      }
-      throw error;
-    }
-  }
-
-  async writeConfig(config) {
-    await this.ensure();
-    const filePath = path.join(this.root, "config.json");
-    await fs.writeFile(filePath, JSON.stringify(config, null, 2), "utf8");
-  }
 }
 
 function definedFields(value) {

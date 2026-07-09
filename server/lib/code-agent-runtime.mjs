@@ -382,7 +382,7 @@ export class CodeAgentRuntime {
       }
     } else {
       throw Object.assign(
-        new Error("Automatic patch generation requires a configured LLM runtime. Set up a provider and model first."),
+        new Error("Automatic patch generation requires Hermes runtime. Start/connect Hermes serve first."),
         { status: 503, setupRequired: true }
       );
     }
