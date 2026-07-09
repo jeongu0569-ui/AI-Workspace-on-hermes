@@ -11,12 +11,12 @@ This document audits the absorption state of the Hermes core runtime inside AI W
 | **Provider Registry** | Canonical provider identifiers with their models and credential mappings. | Defined inside `config-store.mjs` `BUILTIN_PROVIDERS` listing. | `implemented` |
 | **Model Selection** | Extracting selected provider/model configurations. | Resolved from current default configuration or prompt arguments. | `implemented` |
 | **Default Model 관리** | Scriptable and interactive default model selection. | Supported via `aiw model set-default` and interactive `aiw model`. | `implemented` |
-| **Fallback Provider Chain** | Multi-provider fallback chain if defaults are missing. | Supports `fallback_chain` in config.yaml; loops over fallback targets on errors. | `implemented` |
+| **Fallback Provider Chain** | Multi-provider fallback chain if defaults are missing. | Supports `fallback_chain` in config.yaml; loops over fallback targets on error with classified conditions (rate limit, auth, network, model/provider unavailable). | `implemented` |
 | **Auth Flows** | Dynamic credential pool additions, list checks, and deletions. | Supported via `aiw auth set`, `aiw auth list`, and `aiw auth remove`. | `implemented` |
 | **Session Lifecycle** | Create, resume, list, browse, rename, export, prune, and delete. | Fully supported in both CLI (`rename`, `export`, `prune`, `delete`) and TUI browser. | `implemented` |
 | **Tool Registry** | Common core tools configuration and executor. | Workspace search, file reader, and directory tree lister are native. | `implemented` |
 | **Tools Toggle** | Toggling specific tool activations. | Filters tools using `disabled_tools` list in config.yaml. Toggleable via CLI `aiw tools`. | `implemented` |
-| **MCP Server Registry** | Managing Model Context Protocol servers. | Supports `mcp_servers` configuration. Commands `aiw mcp list/add/remove/enable/disable`. | `implemented` |
+| **MCP Server Registry** | Managing Model Context Protocol servers. | Supports `mcp_servers` configuration, commands, and actual stdio JSON-RPC client connection (initialize, tools/list, tools/call). | `implemented` |
 | **Skills / Plugins** | Custom bundle plugins and active skill injection. | Built-in guide skill is supported, but arbitrary plugin loading is absent. | `missing` |
 | **Approvals & Security** | Safe action approval queues, hooks, and execution rules. | Task approval queue for code patches and git operations is native. | `partially implemented` |
 | **Doctor & Diagnostics** | Diagnostic tests, status outputs, and tracing logs. | Fully supported via `aiw doctor` inspecting all configurations and connections. | `implemented` |
@@ -30,11 +30,11 @@ This document audits the absorption state of the Hermes core runtime inside AI W
 ## Implementation Checklists
 
 ### Phase 1: Core Lifecycle & Diagnostics (Completed)
-- [x] Implement Fallback Provider Chain with recursive retry and `fallback.attempt` events.
+- [x] Implement Fallback Provider Chain with recursive retry, condition categorization (rate limit, auth, network, etc.), and `fallback.attempt` events.
 - [x] Implement Session extensions: list, rename, export (markdown), prune (empty logs), and delete.
 - [x] Add prune, rename, and export to TUI session browser.
 - [x] Add Tools Toggle (`aiw tools list/enable/disable`) storing choices in config.yaml.
-- [x] Add MCP Server Registry (`aiw mcp list/add/remove/enable/disable`) with registry configuration and stub execution.
+- [x] Add MCP Server Registry and stdio JSON-RPC client connection (initialize, tools/list, tools/call, timeouts, and process crash handlers).
 - [x] Implement `aiw doctor` showing comprehensive workspace, config, auth, and network diagnostics.
 
 ### Phase 2: Skills & Security (Planned)

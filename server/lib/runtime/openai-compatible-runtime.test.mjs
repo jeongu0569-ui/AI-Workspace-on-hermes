@@ -210,15 +210,85 @@ test("OpenAI-compatible runtime filters tools using disabledTools config", async
   assert.equal(sentTools.some(t => t.function.name === "workspace_read_file"), true);
 });
 
-test("OpenAI-compatible runtime exposes MCP tools and stub-executes them", async () => {
+test("OpenAI-compatible runtime exposes MCP tools and executes them via stdio JSON-RPC", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-mcp-"));
   await setDefaultModel(root, "openai-api", "gpt-5.5");
   await setCredentialValue(root, "openai-api", "AIW_OPENAI_API_KEY", "test-key");
 
+  const mockMcpScript = `
+import readline from "readline";
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  terminal: false
+});
+
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  try {
+    const req = JSON.parse(line);
+    if (req.method === "initialize") {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: {
+          protocolVersion: "2024-11-05",
+          capabilities: { tools: {} },
+          serverInfo: { name: "mock-calculator", version: "1.0.0" }
+        }
+      }) + "\\n");
+    } else if (req.method === "tools/list") {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: req.id,
+        result: {
+          tools: [
+            {
+              name: "add",
+              description: "Add two numbers",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  a: { type: "number" },
+                  b: { type: "number" }
+                },
+                required: ["a", "b"]
+              }
+            }
+          ]
+        }
+      }) + "\\n");
+    } else if (req.method === "tools/call") {
+      const { a, b } = req.params.arguments || {};
+      if (req.params.name === "add") {
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          id: req.id,
+          result: {
+            content: [
+              { type: "text", text: String((a || 0) + (b || 0)) }
+            ]
+          }
+        }) + "\\n");
+      } else {
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          id: req.id,
+          error: { code: -32601, message: "Method not found" }
+        }) + "\\n");
+      }
+    }
+  } catch (err) {}
+});
+`;
+  const serverPath = path.join(root, "mock-server.mjs");
+  await fs.writeFile(serverPath, mockMcpScript, "utf8");
+
   await writeRuntimeConfig(root, {
     defaultModel: { provider: "openai-api", model: "gpt-5.5" },
     mcpServers: [
-      { name: "calculator", command: "node", args: ["calc.js"], enabled: true }
+      { name: "calculator", command: "node", args: [serverPath], enabled: true }
     ]
   });
 
@@ -241,16 +311,87 @@ test("OpenAI-compatible runtime exposes MCP tools and stub-executes them", async
 
   await runtime.submitPrompt({ sessionId: "session-1", message: "계산해줘" });
   assert.ok(sentTools);
-  assert.equal(sentTools.some(t => t.function.name === "mcp_calculator_tool"), true);
+  assert.equal(sentTools.some(t => t.function.name === "mcp_calculator_add"), true);
 
   const execResult = await runtime.executeToolCall({
     id: "call_mcp",
-    name: "mcp_calculator_tool",
-    arguments: '{"a":1}'
+    name: "mcp_calculator_add",
+    arguments: '{"a":5,"b":10}'
   }, { sessionId: "session-1" });
 
   assert.equal(execResult.ok, true);
-  assert.match(execResult.output, /Executed MCP command: node calc.js/);
+  assert.deepEqual(execResult.output, [{ type: "text", text: "15" }]);
+
+  runtime.close();
+});
+
+test("McpClient server crash handling and timeout error", async () => {
+  const { McpClient } = await import("./mcp-client.mjs");
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-mcp-crash-"));
+  
+  const timeoutServerScript = `
+import readline from "readline";
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+rl.on("line", (line) => {
+  const req = JSON.parse(line);
+  if (req.method === "initialize") {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "timeout-server" } }
+    }) + "\\n");
+  }
+});
+`;
+  const timeoutServerPath = path.join(root, "timeout-server.mjs");
+  await fs.writeFile(timeoutServerPath, timeoutServerScript, "utf8");
+
+  const client = new McpClient("timeout", "node", [timeoutServerPath]);
+  await client.start();
+
+  await assert.rejects(
+    () => client.sendRequest("tools/list", {}, 100),
+    /timed out/
+  );
+
+  client.stop();
+
+  const crashServerScript = `
+process.exit(1);
+`;
+  const crashServerPath = path.join(root, "crash-server.mjs");
+  await fs.writeFile(crashServerPath, crashServerScript, "utf8");
+
+  const crashClient = new McpClient("crash", "node", [crashServerPath]);
+  await assert.rejects(
+    () => crashClient.start(),
+    /exited with code 1/
+  );
+  
+  crashClient.stop();
+});
+
+test("OpenAI-compatible runtime fallback conditions separation", async () => {
+  const { classifyError } = await import("./openai-compatible-runtime.mjs");
+
+  assert.equal(classifyError({ status: 429 }), "rate_limit");
+  assert.equal(classifyError(new Error("Rate limit exceeded")), "rate_limit");
+  assert.equal(classifyError(new Error("Too many requests")), "rate_limit");
+
+  assert.equal(classifyError({ status: 401 }), "auth_error");
+  assert.equal(classifyError({ status: 403 }), "auth_error");
+  assert.equal(classifyError(new Error("unauthorized access")), "auth_error");
+  assert.equal(classifyError(new Error("needs an API key")), "auth_error");
+
+  assert.equal(classifyError(new Error("fetch failed")), "network_error");
+  assert.equal(classifyError(new Error("getaddrinfo ENOTFOUND")), "network_error");
+  assert.equal(classifyError({ status: 504 }), "network_error");
+
+  assert.equal(classifyError({ status: 503 }), "provider_unavailable");
+  assert.equal(classifyError(new Error("Unknown provider: foo")), "provider_unavailable");
+
+  assert.equal(classifyError({ status: 404 }), "model_unavailable");
+  assert.equal(classifyError(new Error("Unknown model")), "model_unavailable");
 });
 
 test("SessionRuntime rename, export, and prune", async () => {

@@ -28,6 +28,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     this.env = env;
     this.fetch = fetchImpl;
     this.sessions = new Map();
+    this.mcpClients = new Map();
   }
 
   async connect() {
@@ -128,7 +129,8 @@ export class OpenAICompatibleRuntime extends EventEmitter {
               fromModel: selection ? selection.model : params.model,
               toProvider: nextProvider,
               toModel: nextModel,
-              error: error.message
+              error: error.message,
+              condition: classifyError(error)
             });
 
             activeParams.provider = nextProvider;
@@ -199,20 +201,28 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     if (config.mcpServers) {
       for (const mcp of config.mcpServers) {
         if (mcp.enabled !== false) {
-          activeTools.push({
-            type: "function",
-            function: {
-              name: `mcp_${mcp.name}_tool`,
-              description: `Execute tool from MCP server ${mcp.name}`,
-              parameters: {
-                type: "object",
-                properties: {
-                  command: { type: "string" },
-                  arguments: { type: "array", items: { type: "string" } }
+          try {
+            const client = await this.getOrStartMcpClient(mcp);
+            const mcpTools = await client.listTools();
+            for (const tool of mcpTools) {
+              activeTools.push({
+                type: "function",
+                function: {
+                  name: `mcp_${mcp.name}_${tool.name}`,
+                  description: tool.description || "",
+                  parameters: tool.inputSchema || { type: "object", properties: {} }
                 }
-              }
+              });
             }
-          });
+          } catch (err) {
+            this.emit("event", {
+              type: "mcp.error",
+              sessionId: params.sessionId,
+              taskId: params.taskId,
+              serverName: mcp.name,
+              error: err.message
+            });
+          }
         }
       }
     }
@@ -291,9 +301,12 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       return { ok: false, error: errorMsg };
     }
 
-    // Check if it is MCP tool stub execution
+    // Check if it is MCP tool execution
     if (call.name.startsWith("mcp_")) {
-      const mcpName = call.name.split("_")[1];
+      const parts = call.name.split("_");
+      const mcpName = parts[1];
+      const originalToolName = parts.slice(2).join("_");
+
       const mcp = config.mcpServers?.find((s) => s.name === mcpName);
       if (!mcp) {
         const errorMsg = `MCP server '${mcpName}' not found.`;
@@ -303,10 +316,59 @@ export class OpenAICompatibleRuntime extends EventEmitter {
         const errorMsg = `MCP server '${mcpName}' is disabled.`;
         return { ok: false, error: errorMsg };
       }
-      return {
-        ok: true,
-        output: `Executed MCP command: ${mcp.command} ${mcp.args?.join(" ")} with args: ${JSON.stringify(call.arguments)}`
-      };
+
+      this.emit("event", {
+        type: "tool.start",
+        sessionId: params.sessionId,
+        taskId: params.taskId,
+        toolCallId: call.id,
+        toolName: call.name,
+        text: call.name
+      });
+
+      try {
+        const client = await this.getOrStartMcpClient(mcp);
+        let argsObj = call.arguments;
+        if (typeof argsObj === "string") {
+          try {
+            argsObj = JSON.parse(argsObj);
+          } catch {
+            argsObj = {};
+          }
+        }
+        const mcpResult = await client.callTool(originalToolName, argsObj);
+        const output = mcpResult.content || mcpResult;
+
+        this.emit("event", {
+          type: "tool.complete",
+          sessionId: params.sessionId,
+          taskId: params.taskId,
+          toolCallId: call.id,
+          toolName: call.name,
+          text: call.name,
+          result: { ok: true, output }
+        });
+        return { ok: true, output };
+      } catch (error) {
+        const errorMsg = error?.message || "MCP tool execution failed.";
+        this.emit("event", {
+          type: "tool.error",
+          sessionId: params.sessionId,
+          taskId: params.taskId,
+          toolCallId: call.id,
+          toolName: call.name,
+          text: errorMsg,
+          error: errorMsg
+        });
+        this.emit("event", {
+          type: "mcp.error",
+          sessionId: params.sessionId,
+          taskId: params.taskId,
+          serverName: mcpName,
+          error: errorMsg
+        });
+        return { ok: false, error: errorMsg };
+      }
     }
 
     this.emit("event", {
@@ -367,7 +429,27 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     this.sessions.set(sessionId, session);
   }
 
-  close() {}
+  async getOrStartMcpClient(mcpConfig) {
+    let client = this.mcpClients.get(mcpConfig.name);
+    if (!client) {
+      const { McpClient } = await import("./mcp-client.mjs");
+      client = new McpClient(mcpConfig.name, mcpConfig.command, mcpConfig.args || []);
+      this.mcpClients.set(mcpConfig.name, client);
+    }
+    if (client.status !== "running") {
+      await client.start();
+    }
+    return client;
+  }
+
+  close() {
+    for (const client of this.mcpClients.values()) {
+      try {
+        client.stop();
+      } catch {}
+    }
+    this.mcpClients.clear();
+  }
 
   async resolveModelSelection(params = {}) {
     const config = await readRuntimeConfig(this.workspaceRoot);
@@ -590,4 +672,44 @@ function clampNumber(value, min, max, fallback) {
 
 function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
+}
+
+export function classifyError(error) {
+  const msg = String(error?.message || "").toLowerCase();
+  const status = error?.status;
+
+  if (status === 429 || msg.includes("rate limit") || msg.includes("too many requests")) {
+    return "rate_limit";
+  }
+  if (
+    status === 401 ||
+    status === 403 ||
+    msg.includes("api key") ||
+    msg.includes("unauthorized") ||
+    msg.includes("credential") ||
+    msg.includes("auth") ||
+    error?.setupRequired
+  ) {
+    return "auth_error";
+  }
+  if (
+    msg.includes("fetch failed") ||
+    msg.includes("enotfound") ||
+    msg.includes("econnrefused") ||
+    msg.includes("network") ||
+    status === 502 ||
+    status === 504
+  ) {
+    return "network_error";
+  }
+  if (status === 404 || msg.includes("model not found") || msg.includes("unknown model") || msg.includes("model unavailable")) {
+    return "model_unavailable";
+  }
+  if (status === 503 || msg.includes("provider unavailable") || msg.includes("unknown provider")) {
+    return "provider_unavailable";
+  }
+  if (status >= 500) {
+    return "provider_unavailable";
+  }
+  return "unknown_error";
 }
