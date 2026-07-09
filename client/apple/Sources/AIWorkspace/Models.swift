@@ -137,6 +137,174 @@ struct SearchResponse: Codable {
     let results: [Result]
 }
 
+struct AgentTasksResponse: Codable {
+    let tasks: [AgentTaskSummary]
+}
+
+struct AgentTaskSummary: Codable, Identifiable, Hashable {
+    let id: String
+    let type: String?
+    let status: String?
+    let createdAt: String?
+    let updatedAt: String?
+    let adapter: String?
+    let sessionId: String?
+    let scopePath: String?
+    let message: String?
+    let summary: String?
+}
+
+struct CodeTaskRecord: Codable, Identifiable {
+    struct Plan: Codable {
+        struct Step: Codable, Identifiable {
+            var id: String { title }
+            let title: String
+            let status: String?
+            let detail: String?
+        }
+
+        let summary: String?
+        let instruction: String?
+        let steps: [Step]?
+        let risks: [String]?
+    }
+
+    struct GitInfo: Codable {
+        let isRepository: Bool?
+        let root: String?
+        let status: String?
+        let diffStat: String?
+        let diffRef: String?
+    }
+
+    let id: String
+    let type: String?
+    let status: String?
+    let createdAt: String?
+    let updatedAt: String?
+    let message: String?
+    let scopePath: String?
+    let plan: Plan?
+    let git: GitInfo?
+    let taskMemory: CodeTaskMemory?
+    let patchProposals: [CodePatchProposal]?
+    let checks: [CodeCheckRun]?
+    let filesChanged: [String]?
+}
+
+struct CodeTaskMemory: Codable, Hashable {
+    let readFiles: [String]
+    let proposedFiles: [String]
+    let changedFiles: [String]
+    let commands: [String]
+    let checkResults: [CodeCheckSummary]
+    let failureLogs: [CodeFailureLog]
+    let nextSteps: [String]
+    let notes: [String]
+}
+
+struct CodeCheckSummary: Codable, Hashable, Identifiable {
+    let id: String
+    let allPassed: Bool?
+    let finishedAt: String?
+    let results: [CodeCheckCommandSummary]?
+}
+
+struct CodeCheckRun: Codable, Hashable, Identifiable {
+    let id: String
+    let approved: Bool?
+    let startedAt: String?
+    let finishedAt: String?
+    let scopePath: String?
+    let commands: [String]?
+    let allPassed: Bool?
+    let results: [CodeCheckCommandResult]?
+}
+
+struct CodeCheckCommandResult: Codable, Hashable {
+    let command: String?
+    let ok: Bool?
+    let exitCode: Int?
+    let signal: String?
+    let durationMs: Int?
+    let stdout: String?
+    let stderr: String?
+}
+
+struct CodeCheckCommandSummary: Codable, Hashable {
+    let command: String?
+    let ok: Bool?
+    let exitCode: Int?
+    let durationMs: Int?
+}
+
+struct CodeFailureLog: Codable, Hashable {
+    let command: String?
+    let exitCode: Int?
+    let stderr: String?
+    let stdout: String?
+}
+
+struct CodePatchProposal: Codable, Hashable, Identifiable {
+    struct Change: Codable, Hashable, Identifiable {
+        var id: String { path }
+        let operation: String?
+        let path: String
+        let existed: Bool?
+        let oldHash: String?
+        let newHash: String?
+        let oldSize: Int?
+        let newSize: Int?
+    }
+
+    let id: String
+    let status: String?
+    let approved: Bool?
+    let createdAt: String?
+    let appliedAt: String?
+    let scopePath: String?
+    let summary: String?
+    let diffRef: String?
+    let changes: [Change]?
+    let filesChanged: [String]?
+}
+
+struct CodeTaskResponse: Codable {
+    let ok: Bool
+    let engine: String?
+    let runtime: String?
+    let taskId: String
+    let status: String?
+    let scopePath: String?
+    let summary: String?
+    let plan: CodeTaskRecord.Plan?
+    let git: CodeTaskRecord.GitInfo?
+    let taskMemory: CodeTaskMemory?
+}
+
+struct CodePatchApplyResponse: Codable {
+    let ok: Bool
+    let engine: String?
+    let runtime: String?
+    let taskId: String
+    let status: String?
+    let scopePath: String?
+    let proposalId: String?
+    let filesChanged: [String]?
+    let git: CodeTaskRecord.GitInfo?
+    let taskMemory: CodeTaskMemory?
+}
+
+struct CodeChecksResponse: Codable {
+    let ok: Bool
+    let engine: String?
+    let runtime: String?
+    let taskId: String
+    let status: String?
+    let scopePath: String?
+    let taskMemory: CodeTaskMemory?
+}
+
 struct RenderedMarkdownResponse: Codable {
     let html: String
 }

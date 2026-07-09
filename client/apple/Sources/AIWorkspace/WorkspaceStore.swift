@@ -32,6 +32,11 @@ final class WorkspaceStore: ObservableObject {
     @Published var sessionManagerSearch = ""
     @Published var selectedHermesProjectId = "__all__"
     @Published var uploadItems: [UploadItem] = []
+    @Published var codeTasks: [AgentTaskSummary] = []
+    @Published var selectedCodeTask: CodeTaskRecord?
+    @Published var selectedCodeTaskDiff = ""
+    @Published var codeTaskInstruction = ""
+    @Published var isLoadingCodeTask = false
 
     private let liveClient = LiveChatClient()
     private var activeActivityLineId: UUID?
@@ -315,6 +320,111 @@ final class WorkspaceStore: ObservableObject {
 
     func uploads(for root: String) -> [UploadItem] {
         uploadItems.filter { $0.root == root }
+    }
+
+    var currentCodeScopePath: String {
+        codePath.isEmpty ? "Code" : "Code/\(codePath)"
+    }
+
+    func refreshCodeTasks(selectLatest: Bool = false) async {
+        guard let api else { return }
+        isLoadingCodeTask = true
+        defer { isLoadingCodeTask = false }
+        do {
+            codeTasks = try await api.agentTasks(type: "code", limit: 60)
+            if selectLatest, let first = codeTasks.first {
+                await loadCodeTask(first)
+            } else if let selectedCodeTask,
+                      let summary = codeTasks.first(where: { $0.id == selectedCodeTask.id }) {
+                await loadCodeTask(summary)
+            }
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func createCodeInspectTask() async {
+        guard let api else { return }
+        let instruction = codeTaskInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instruction.isEmpty else {
+            statusMessage = "Describe the code task first"
+            return
+        }
+        isLoadingCodeTask = true
+        defer { isLoadingCodeTask = false }
+        do {
+            let response = try await api.createCodeTask(scopePath: currentCodeScopePath, instruction: instruction)
+            codeTaskInstruction = ""
+            statusMessage = "Code task prepared"
+            codeTasks = try await api.agentTasks(type: "code", limit: 60)
+            if let summary = codeTasks.first(where: { $0.id == response.taskId }) {
+                await loadCodeTask(summary)
+            } else {
+                selectedCodeTask = try await api.agentTask(id: response.taskId)
+                await loadSelectedCodeTaskDiff()
+            }
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func loadCodeTask(_ summary: AgentTaskSummary) async {
+        guard let api else { return }
+        isLoadingCodeTask = true
+        defer { isLoadingCodeTask = false }
+        do {
+            selectedCodeTask = try await api.agentTask(id: summary.id)
+            await loadSelectedCodeTaskDiff()
+            statusMessage = "Loaded code task"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func applyCodePatch(_ proposal: CodePatchProposal) async {
+        guard let api, let selectedCodeTask else { return }
+        isLoadingCodeTask = true
+        defer { isLoadingCodeTask = false }
+        do {
+            _ = try await api.applyCodePatch(taskId: selectedCodeTask.id, proposalId: proposal.id)
+            self.selectedCodeTask = try await api.agentTask(id: selectedCodeTask.id)
+            await loadSelectedCodeTaskDiff()
+            await refreshTree(root: "code")
+            statusMessage = "Patch applied"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func runSelectedCodeTaskChecks() async {
+        guard let api, let selectedCodeTask else { return }
+        isLoadingCodeTask = true
+        defer { isLoadingCodeTask = false }
+        do {
+            _ = try await api.runCodeChecks(taskId: selectedCodeTask.id)
+            self.selectedCodeTask = try await api.agentTask(id: selectedCodeTask.id)
+            await loadSelectedCodeTaskDiff()
+            statusMessage = "Checks finished"
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func loadSelectedCodeTaskDiff() async {
+        let proposalDiffRef = selectedCodeTask?.patchProposals?
+            .reversed()
+            .first(where: { $0.status == "proposed" || $0.status == "applied" })?
+            .diffRef
+        let diffRef = proposalDiffRef ?? selectedCodeTask?.git?.diffRef
+        guard let api, let diffRef, !diffRef.isEmpty else {
+            selectedCodeTaskDiff = ""
+            return
+        }
+        do {
+            selectedCodeTaskDiff = try await api.file(path: diffRef).content
+        } catch {
+            selectedCodeTaskDiff = ""
+        }
     }
 
     private func addUploadItem(id: UUID, root: String, fileURL: URL, destination: String) {

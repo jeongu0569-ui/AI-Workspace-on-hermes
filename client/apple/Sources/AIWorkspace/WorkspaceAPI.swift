@@ -158,6 +158,43 @@ struct WorkspaceAPI {
         return try await post("/api/search", body: body)
     }
 
+    func agentTasks(type: String = "code", limit: Int = 50) async throws -> [AgentTaskSummary] {
+        var components = try components("/api/agent/tasks")
+        components.queryItems = [
+            URLQueryItem(name: "type", value: type),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        let response: AgentTasksResponse = try await request(components)
+        return response.tasks
+    }
+
+    func agentTask(id: String) async throws -> CodeTaskRecord {
+        var components = try components("/api/agent/tasks/\(id)")
+        components.percentEncodedPath = "/api/agent/tasks/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)"
+        return try await request(components)
+    }
+
+    func createCodeTask(scopePath: String, instruction: String) async throws -> CodeTaskResponse {
+        try await post("/api/agent/code-task", body: CodeTaskCreateBody(
+            scopePath: scopePath,
+            instruction: instruction,
+            maxFiles: 160,
+            maxSearchResults: 10
+        ))
+    }
+
+    func applyCodePatch(taskId: String, proposalId: String) async throws -> CodePatchApplyResponse {
+        var components = try components("/api/agent/code-task/\(taskId)/patches/\(proposalId)/apply")
+        components.percentEncodedPath = "/api/agent/code-task/\(taskId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? taskId)/patches/\(proposalId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? proposalId)/apply"
+        return try await request(components, method: "POST", body: ApprovedBody(approved: true))
+    }
+
+    func runCodeChecks(taskId: String) async throws -> CodeChecksResponse {
+        var components = try components("/api/agent/code-task/\(taskId)/checks")
+        components.percentEncodedPath = "/api/agent/code-task/\(taskId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? taskId)/checks"
+        return try await request(components, method: "POST", body: ApprovedBody(approved: true))
+    }
+
     func hermesModelOptions() async throws -> [HermesModelOption] {
         let data = try await dataRequest(try components("/api/hermes/models"))
         let object = try JSONSerialization.jsonObject(with: data)
@@ -240,6 +277,17 @@ private struct ChunkedUploadChunkBody: Encodable {
 
 private struct ChunkedUploadIDBody: Encodable {
     let uploadId: String
+}
+
+private struct CodeTaskCreateBody: Encodable {
+    let scopePath: String
+    let instruction: String
+    let maxFiles: Int
+    let maxSearchResults: Int
+}
+
+private struct ApprovedBody: Encodable {
+    let approved: Bool
 }
 
 struct AnyEncodable: Encodable {

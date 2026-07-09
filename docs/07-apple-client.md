@@ -119,6 +119,11 @@ Implemented:
   with `POST /api/file/upload/cancel` when possible.
 - completed uploads refresh the current file tree and auto-open the uploaded
   item when it is visible in the current folder.
+- the Code browser now includes a compact Code Agent panel backed by the
+  Workspace Agent Engine. It can create an inspect task for the current Code
+  folder, list recent code tasks, load task detail, show `taskMemory`, show the
+  latest proposed/git diff artifact, approve/apply an existing patch proposal,
+  and run approved checks through the Workspace Server.
 - approval and denial buttons for `approval.request` events
 - normalized Hermes session menu titles instead of raw generated session ids
 - zero-message Hermes sessions are hidden from the client session list
@@ -195,10 +200,39 @@ POST /api/file/upload/chunk
 POST /api/file/upload/complete
 POST /api/file/upload/cancel
 POST /api/search
+GET  /api/agent/tasks
+GET  /api/agent/tasks/:id
+POST /api/agent/code-task
+POST /api/agent/code-task/:id/patches/:proposalId/apply
+POST /api/agent/code-task/:id/checks
 WS   /api/live
 ```
 
 It should not directly access filesystem paths or Hermes dashboard cookies.
+
+## Code Agent Panel
+
+The Code section has a first Workspace Agent surface. It is deliberately small:
+the Apple app does not run shell commands or write files locally. It sends
+requests to the Workspace Server, and the server-side `CodeAgentRuntime` owns
+scope checks, approval requirements, patch application, command execution,
+tool logs, task memory, and diff artifacts.
+
+Current client flow:
+
+```text
+Code browser current folder
+  -> Create code task
+  -> GET recent code tasks
+  -> Load task detail and taskMemory
+  -> Show proposed patch diff when present
+  -> Approve existing patch proposal
+  -> Run approved checks
+```
+
+This is not yet an automatic LLM-authored coding loop. The current client
+surface exposes the server v1 primitives so later agent steps can plug into the
+same task/diff/approval model instead of inventing a separate client-side flow.
 
 ## Live Chat Flow
 

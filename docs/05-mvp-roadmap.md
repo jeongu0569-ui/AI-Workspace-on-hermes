@@ -177,11 +177,19 @@ Status: in progress.
 - Task memory accumulation. Done at the server level: code tasks now maintain a
   bounded `taskMemory` summary with read files, proposed files, changed files,
   executed commands, check summaries, failure logs, next steps, and notes.
+- Apple client Code Agent panel. First pass done: the Code browser can create
+  inspect tasks for the current Code folder, list/load recent code tasks, show
+  task memory, show the latest proposed/git diff artifact, approve/apply an
+  existing patch proposal, and run approved checks through the Workspace Server.
 
 Remaining:
 
-- Diff viewer in the Apple client.
-- Approval UI for code task patch/check execution.
+- Rich diff viewer in the Apple client. A compact text diff view exists in the
+  Code Agent panel, but side-by-side hunks, file grouping, and stronger review
+  ergonomics are still pending.
+- Full approval UI for code task patch/check execution. The first apply/check
+  buttons exist, but a dedicated approval inbox and richer safety copy are still
+  pending.
 - Codex-style work loop:
   - inspect files. Initial server pass done.
   - plan
