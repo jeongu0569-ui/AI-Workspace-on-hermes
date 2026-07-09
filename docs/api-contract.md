@@ -175,6 +175,54 @@ Runtime tasks can pause with `status=approval_required`. The server stores
 `approvalIds[]` and `pendingState`; clients should approve/reject/cancel through
 the server instead of reconstructing tool calls.
 
+## Tool Modes, Discovery, Conversations, And Memory
+
+| Method | Path | Status | Auth | Client |
+|---|---|---:|---|---|
+| GET | `/api/tool-modes` | implemented | token when configured | Apple settings |
+| POST | `/api/tool-modes/:surface` | implemented | token when configured | Apple settings |
+| GET | `/api/tools/available` | implemented | token when configured | Apple settings/runtime |
+| POST | `/api/tools/discover` | implemented | token when configured | runtime |
+| POST | `/api/conversations/search` | implemented | token when configured | runtime/search |
+| POST | `/api/conversations/read` | implemented | token when configured | runtime/search |
+| GET | `/api/conversation-folders` | implemented | token when configured | Apple sessions |
+| POST | `/api/conversation-folders` | implemented | token when configured | Apple sessions |
+| PATCH | `/api/conversation-folders/:id` | implemented | token when configured | Apple sessions |
+| DELETE | `/api/conversation-folders/:id` | implemented | token when configured | Apple sessions |
+| POST | `/api/sessions/:id/move-to-folder` | implemented | token when configured | Apple sessions |
+| POST | `/api/sessions/:id/archive` | implemented | token when configured | Apple sessions |
+| POST | `/api/sessions/:id/unarchive` | implemented | token when configured | Apple sessions |
+| POST | `/api/sessions/archive-expired` | implemented | token when configured | maintenance |
+| POST | `/api/sessions/:id/summarize` | implemented | token when configured | runtime |
+| GET | `/api/memory/search` | implemented | token when configured | runtime/search |
+| POST | `/api/memory` | implemented | token when configured | settings/runtime |
+| GET | `/api/memory/:id` | implemented | token when configured | settings/runtime |
+| PATCH | `/api/memory/:id` | implemented | token when configured | settings/runtime |
+| DELETE | `/api/memory/:id` | implemented | token when configured | settings/runtime |
+| POST | `/api/memory/extract-from-session` | implemented | token when configured | runtime |
+
+Tool modes are surface-scoped:
+
+```text
+chat  -> conversation_search, conversation_read, memory_search, tool_discovery
+notes -> workspace/docsearch/read-note/file-metadata tools plus conversation/memory tools
+code  -> CodeAgentRuntime search/read/git/patch/check tools plus conversation/memory tools
+```
+
+`tool_discovery` can temporarily expand safe tools for the current turn. It
+does not auto-enable approval-gated tools such as `apply_patch`,
+`run_checks`, or `run_git_command`.
+
+Conversation search supports fuzzy keyword recall and time ranges:
+`today`, `yesterday`, `this_week`, `last_week`, `last_7_days`, and ISO date
+ranges. `last_week` means the previous calendar Monday-Sunday in the server's
+Asia/Seoul default time basis, while `last_7_days` is rolling.
+
+General unscoped `[Chat]` sessions are count-managed rather than date-managed:
+the server keeps the latest 30 visible general chats and archives older
+overflow. Sessions attached to a project, folder, pin, active code task, or
+pending approval are exempt.
+
 ## Code Tasks
 
 | Method | Path | Status | Auth | Client |
@@ -199,10 +247,20 @@ The server uses `marked` and `shiki`.
 ## Models, Providers, Auth
 
 `aiw model`, `aiw provider`, and `aiw auth` own local runtime config under
-`.ai-workspace/config`. HTTP model listing is implemented through `/api/models`.
-Provider/auth mutation endpoints are not yet exposed as HTTP endpoints.
+`.ai-workspace/config`. The same store is now exposed through HTTP so the Apple
+client can configure runtime access without shell commands.
 
-Status: partial, CLI-first.
+| Method | Path | Status | Auth | Client |
+|---|---|---:|---|---|
+| GET | `/api/providers` | implemented | token when configured | Apple settings |
+| GET | `/api/models` | implemented | token when configured | Apple chat/settings |
+| GET | `/api/auth` | implemented | token when configured | Apple settings |
+| POST | `/api/auth/:provider` | implemented | token when configured | Apple settings |
+| DELETE | `/api/auth/:provider/:key` | implemented | token when configured | Apple settings |
+| GET | `/api/model/default` | implemented | token when configured | Apple settings |
+| POST | `/api/model/default` | implemented | token when configured | Apple settings |
+| POST | `/api/providers/custom` | implemented | token when configured | Apple settings |
+| DELETE | `/api/providers/custom/:id` | implemented | token when configured | Apple settings |
 
 ## Skills
 

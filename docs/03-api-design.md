@@ -449,6 +449,183 @@ Rejection:
 }
 ```
 
+## Tool Modes, Tool Discovery, Conversation Search, And Memory
+
+AI Workspace now exposes tool configuration as a first-class server contract.
+The model does not receive every possible tool in every surface. The runtime
+loads a surface mode, filters the callable tool list, and can use
+`tool_discovery` to expand safe tools for only the current turn.
+
+### `GET /api/tool-modes`
+
+Returns the effective tool mode per surface:
+
+```json
+{
+  "chat": {
+    "surface": "chat",
+    "mode": "default",
+    "enabledTools": [
+      "conversation_search",
+      "memory_search",
+      "tool_discovery",
+      "conversation_read"
+    ],
+    "requiresApproval": []
+  },
+  "notes": {
+    "surface": "notes",
+    "enabledTools": [
+      "workspace_search",
+      "docsearch_search",
+      "read_note_file",
+      "read_file_metadata"
+    ]
+  },
+  "code": {
+    "surface": "code",
+    "enabledTools": [
+      "search_project",
+      "read_project_file",
+      "inspect_git",
+      "get_git_diff",
+      "propose_patch",
+      "apply_patch",
+      "run_checks",
+      "run_git_command"
+    ],
+    "requiresApproval": [
+      "apply_patch",
+      "run_checks",
+      "run_git_command"
+    ]
+  }
+}
+```
+
+### `POST /api/tool-modes/:surface`
+
+Stores a user override for one surface. Mandatory conversation tools remain
+available so the assistant can always search/read prior conversations.
+
+### `GET /api/tools/available`
+
+Returns the server tool registry used by settings UI and by
+`tool_discovery`.
+
+### `POST /api/tools/discover`
+
+Request:
+
+```json
+{
+  "surface": "chat",
+  "reason": "Need note search",
+  "desiredCapability": "search indexed PDF notes"
+}
+```
+
+Response:
+
+```json
+{
+  "expandedToolsForThisTurn": ["docsearch_search"],
+  "availableToolGroups": [
+    {
+      "group": "notes_search",
+      "requiresApproval": false,
+      "tools": [
+        { "name": "docsearch_search" }
+      ]
+    }
+  ]
+}
+```
+
+Only safe tools are returned in `expandedToolsForThisTurn`. Approval-gated
+tools such as `apply_patch`, `run_checks`, and `run_git_command` remain gated by
+the approval system.
+
+### `POST /api/conversations/search`
+
+Searches indexed session summaries and messages. Search is fuzzy keyword based:
+the query does not need to be an exact phrase from the old conversation.
+
+Supported `timeRange` values:
+
+```text
+today
+yesterday
+this_week
+last_week
+last_7_days
+YYYY-MM-DD..YYYY-MM-DD
+YYYY-MM-DD/YYYY-MM-DD
+```
+
+`last_week` means the previous calendar Monday-Sunday in the server's
+Asia/Seoul default time basis. `last_7_days` is rolling from the current time.
+
+### `POST /api/conversations/read`
+
+Reads specific messages from a session and can include surrounding context.
+Overlapping windows are de-duplicated while preserving which messages were
+targets.
+
+### Conversation Folders And Archive
+
+Conversation folders are lightweight metadata groups for saved sessions:
+
+```text
+GET    /api/conversation-folders
+POST   /api/conversation-folders
+PATCH  /api/conversation-folders/:id
+DELETE /api/conversation-folders/:id
+POST   /api/sessions/:id/move-to-folder
+```
+
+Deleting a folder does not delete its memories or sessions. Sessions are simply
+unassigned from the folder.
+
+General unscoped `[Chat]` sessions are limited to the latest 30 visible chats.
+Older overflow is archived by setting `visibleInSidebar=false` and
+`archivedAt`. Project, folder, pinned, active-code-task, and pending-approval
+sessions are exempt.
+
+Manual archive endpoints:
+
+```text
+POST /api/sessions/:id/archive
+POST /api/sessions/:id/unarchive
+GET  /api/conversation-archive
+POST /api/sessions/archive-expired
+```
+
+`/api/sessions/archive-expired` currently applies the 30-visible general chat
+overflow policy.
+
+### Memory API
+
+Memory is stored under `.ai-workspace/memory` and can be searched or edited:
+
+```text
+GET    /api/memory/search?query=...&currentFolderId=...&currentProjectId=...&timeRange=...
+POST   /api/memory
+GET    /api/memory/:id
+PATCH  /api/memory/:id
+DELETE /api/memory/:id
+POST   /api/memory/extract-from-session
+```
+
+Session updates can extract:
+
+- user preference memory
+- project memory
+- folder memory
+- session summary memory
+
+Each extracted memory keeps `sourceSessionIds[]` and `sourceMessageIds[]`.
+
 ### `POST /api/agent/code-task`
 
 Starts the first Codex-style code task loop inside the Workspace Agent Engine.
@@ -1027,15 +1204,19 @@ Server responses use:
 ## Model / Provider / Auth Boundary
 
 AI Workspace provider and credential APIs are owned by the runtime config store.
-Do not add endpoints that bypass the runtime store:
+HTTP and CLI commands must both use that same store. Do not add parallel
+endpoints that bypass it.
 
 ```text
-GET/POST /api/config
-GET/POST /api/workspace/providers
-PATCH/DELETE /api/workspace/providers/:id
-GET/POST /api/workspace/credentials
-DELETE /api/workspace/credentials/:id
-POST /api/workspace/models/default
+GET    /api/providers
+GET    /api/models
+GET    /api/auth
+POST   /api/auth/:provider
+DELETE /api/auth/:provider/:key
+GET    /api/model/default
+POST   /api/model/default
+POST   /api/providers/custom
+DELETE /api/providers/custom/:id
 ```
 
 Use AI Workspace CLI commands:

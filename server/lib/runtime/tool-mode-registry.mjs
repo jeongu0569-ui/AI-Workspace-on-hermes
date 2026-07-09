@@ -32,11 +32,18 @@ export const DEFAULT_TOOL_MODES = {
       "inspect_git",
       "get_git_diff",
       "propose_patch",
+      "apply_patch",
       "run_checks",
+      "run_git_command",
       "conversation_search",
       "memory_search",
       "tool_discovery",
       "conversation_read"
+    ],
+    requiresApproval: [
+      "apply_patch",
+      "run_checks",
+      "run_git_command"
     ]
   }
 };

@@ -53,8 +53,13 @@ The first migration step is already underway:
 - A first AI Workspace-owned OpenAI-compatible chat backend can execute
   configured models and stream `message.delta` events without a separate
   external runtime server.
-- A first read-only workspace tool registry lets capable models call search,
-  file-read, and folder-list tools through AI Workspace-owned code.
+- Surface-based tool modes let capable models call chat recall, memory,
+  note/document search, and CodeAgentRuntime tools through AI Workspace-owned
+  code. Mutating code tools remain approval-gated.
+- `tool_discovery` can expand safe tools for the current turn without
+  permanently enabling every tool for every chat.
+- Conversation search/read and long-term memory now give the runtime compact
+  recall without pasting all prior messages into every request.
 - Assistant replies are now persisted to `.ai-workspace/sessions` from live
   streaming events, so session history and visible streamed output share the
   same runtime path.

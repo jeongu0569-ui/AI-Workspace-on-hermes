@@ -40,6 +40,10 @@ This repository currently contains the first server-centered scaffold:
 - read-only Workspace tool calling for search, file reads, and folder tree listing
 - AI Workspace session store under `.ai-workspace/sessions`
 - live WebSocket endpoint at `WS /api/live`
+- surface-based tool modes and same-turn safe tool discovery
+- fuzzy conversation search/read over saved session summaries and messages
+- long-term user/project/folder/session memory extraction and search
+- count-based archive policy for unscoped `[Chat]` sessions: latest 30 visible
 - workspace context router for note/folder/PDF/workspace scopes
 - fallback workspace text search API
 - file metadata index API
@@ -133,11 +137,29 @@ GET  /api/security
 GET  /api/mcp
 GET  /api/doctor
 
+GET  /api/providers
+GET  /api/auth
+POST /api/auth/:provider
+GET  /api/model/default
+POST /api/model/default
 GET  /api/models
 GET  /api/sessions
 POST /api/sessions
 GET  /api/sessions/:id/messages
 DELETE /api/sessions/:id
+GET  /api/tool-modes
+POST /api/tool-modes/:surface
+GET  /api/tools/available
+POST /api/tools/discover
+POST /api/conversations/search
+POST /api/conversations/read
+GET  /api/conversation-folders
+POST /api/conversation-folders
+POST /api/sessions/:id/archive
+POST /api/sessions/:id/unarchive
+GET  /api/memory/search
+POST /api/memory
+POST /api/memory/extract-from-session
 GET  /api/agent/tasks
 POST /api/agent/tasks/:id/resume
 POST /api/agent/tasks/:id/cancel

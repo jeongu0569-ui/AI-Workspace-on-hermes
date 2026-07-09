@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   archiveExpiredSessions,
+  archiveOverflowGeneralSessions,
   listArchivedSessions,
   archiveSession,
   unarchiveSession,
@@ -63,4 +64,84 @@ test("Session Archive: automatic archive and manual restore", async () => {
   const sessRestore = JSON.parse(await fs.readFile(path.join(root, ".ai-workspace", "sessions", "sess-expired.json"), "utf8"));
   assert.equal(sessRestore.archivedAt, null);
   assert.equal(sessRestore.visibleInSidebar, true);
+});
+
+test("Session Archive: general chat overflow keeps latest 30 visible and exempts scoped chats", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-session-overflow-"));
+  const sessionsDir = path.join(root, ".ai-workspace", "sessions");
+  const approvalsDir = path.join(root, ".ai-workspace", "approvals");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await fs.mkdir(approvalsDir, { recursive: true });
+
+  for (let i = 0; i < 32; i += 1) {
+    const date = new Date(Date.UTC(2026, 6, 1, 0, i)).toISOString();
+    await fs.writeFile(
+      path.join(sessionsDir, `general-${i}.json`),
+      JSON.stringify({
+        id: `general-${i}`,
+        title: `[Chat] ${i}`,
+        kind: "general",
+        createdAt: date,
+        updatedAt: date,
+        visibleInSidebar: true
+      }, null, 2),
+      "utf8"
+    );
+  }
+
+  const exemptSessions = [
+    { id: "folder-chat", folderId: "folder-1" },
+    { id: "project-chat", projectId: "project-1" },
+    { id: "pinned-chat", pinned: true },
+    { id: "approval-chat" }
+  ];
+  for (const item of exemptSessions) {
+    await fs.writeFile(
+      path.join(sessionsDir, `${item.id}.json`),
+      JSON.stringify({
+        id: item.id,
+        title: item.id,
+        kind: "general",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        visibleInSidebar: true,
+        ...item
+      }, null, 2),
+      "utf8"
+    );
+  }
+  await fs.writeFile(
+    path.join(approvalsDir, "approval-pending.json"),
+    JSON.stringify({
+      id: "approval-pending",
+      sessionId: "approval-chat",
+      status: "pending"
+    }, null, 2),
+    "utf8"
+  );
+
+  const result = await archiveOverflowGeneralSessions(root, { limit: 30 });
+  assert.equal(result.archivedCount, 2);
+  assert.equal(result.visibleLimit, 30);
+
+  const files = await fs.readdir(sessionsDir);
+  const sessions = await Promise.all(files.filter((file) => file.endsWith(".json")).map(async (file) => {
+    return JSON.parse(await fs.readFile(path.join(sessionsDir, file), "utf8"));
+  }));
+
+  const visibleGeneral = sessions.filter((session) =>
+    session.kind === "general"
+    && !session.folderId
+    && !session.projectId
+    && !session.pinned
+    && session.id !== "approval-chat"
+    && session.visibleInSidebar !== false
+  );
+  assert.equal(visibleGeneral.length, 30);
+  assert.equal(sessions.find((session) => session.id === "general-0").visibleInSidebar, false);
+  assert.equal(sessions.find((session) => session.id === "general-1").visibleInSidebar, false);
+  assert.equal(sessions.find((session) => session.id === "folder-chat").visibleInSidebar, true);
+  assert.equal(sessions.find((session) => session.id === "project-chat").visibleInSidebar, true);
+  assert.equal(sessions.find((session) => session.id === "pinned-chat").visibleInSidebar, true);
+  assert.equal(sessions.find((session) => session.id === "approval-chat").visibleInSidebar, true);
 });

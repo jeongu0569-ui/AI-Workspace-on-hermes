@@ -11,6 +11,10 @@ export class SessionRuntime {
     let workspaceSessions = [];
     if (this.stateStore) {
       try {
+        const { archiveOverflowGeneralSessions } = await import("./runtime/session-archive.mjs");
+        await archiveOverflowGeneralSessions(this.stateStore.workspaceRoot, {
+          limit: options.generalVisibleLimit || 30
+        });
         workspaceSessions = await this.stateStore.listWorkspaceSessions();
       } catch {}
     }
@@ -156,20 +160,7 @@ export class SessionRuntime {
             session.preview = message.content.slice(0, 60);
           }
 
-          // Generate or update simple summary
-          if (!session.summary || !session.summary.content) {
-            const userMsg = session.messages.find(m => m.role === "user")?.content || "";
-            if (userMsg) {
-              session.summary = {
-                content: `Conversation starting with: ${userMsg.slice(0, 80)}`,
-                coveredMessageIds: session.messages.map((_, idx) => String(idx + 1)),
-                updatedAt: new Date().toISOString()
-              };
-            }
-          } else {
-            session.summary.coveredMessageIds = session.messages.map((_, idx) => String(idx + 1));
-            session.summary.updatedAt = new Date().toISOString();
-          }
+          session.summary = buildSessionSummary(session);
 
           await this.stateStore.writeSession(session);
 
@@ -178,9 +169,25 @@ export class SessionRuntime {
             const { indexSession } = await import("./runtime/conversation-index.mjs");
             await indexSession(this.stateStore.workspaceRoot, session);
           } catch {}
+          try {
+            const { updateMemoryFromSession } = await import("./runtime/memory-retrieval.mjs");
+            await updateMemoryFromSession(this.stateStore.workspaceRoot, session);
+          } catch {}
         }
       } catch {}
     }
+  }
+
+  promptHistory(session, options = {}) {
+    if (!session || !Array.isArray(session.messages)) return [];
+    const limit = clampNumber(options.recentLimit, 2, 30, 12);
+    return session.messages
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .slice(-limit)
+      .map((message) => ({
+        role: message.role,
+        content: message.content
+      }));
   }
 }
 
@@ -188,4 +195,89 @@ function definedFields(value) {
   return Object.fromEntries(
     Object.entries(value || {}).filter(([, item]) => item !== undefined && item !== null && item !== "")
   );
+}
+
+export function buildSessionSummary(session = {}) {
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const visibleMessages = messages.filter((message) => message.role === "user" || message.role === "assistant");
+  const coveredMessageIds = visibleMessages.map((message, index) => String(message.id || index + 1));
+  const combined = visibleMessages
+    .map((message) => `${message.role}: ${message.content || ""}`)
+    .join("\n")
+    .slice(0, 8000);
+  const topics = extractTopics(combined);
+  const entities = extractEntities(combined);
+  const decisions = extractSentences(combined, /(결정|하기로|방향|목표|원칙|사용하지 않는다|사용한다|decided|decision|will use|will not)/i, 8);
+  const preferences = extractSentences(combined, /(선호|원해|원한다|좋아|싫어|prefer|want|like|dislike)/i, 8);
+  const content = summarizeContent(combined, { topics, decisions, preferences });
+  return {
+    content,
+    topics,
+    entities,
+    decisions,
+    preferences,
+    sourceMessageIds: coveredMessageIds,
+    coveredMessageIds,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function summarizeContent(text, { topics, decisions, preferences }) {
+  const parts = [];
+  if (topics.length) parts.push(`주제: ${topics.slice(0, 6).join(", ")}`);
+  if (decisions.length) parts.push(`결정: ${decisions.slice(0, 3).join(" / ")}`);
+  if (preferences.length) parts.push(`선호: ${preferences.slice(0, 2).join(" / ")}`);
+  if (!parts.length) {
+    const compact = text.replace(/\s+/g, " ").trim();
+    return compact ? `대화 요약: ${compact.slice(0, 500)}` : "";
+  }
+  return parts.join("\n");
+}
+
+function extractTopics(text) {
+  const topics = [];
+  const lower = String(text || "").toLowerCase();
+  const pairs = [
+    ["ai workspace", "AI Workspace"],
+    ["hermes", "Hermes"],
+    ["codex", "Codex-style UX"],
+    ["docsearch", "docsearch MCP"],
+    ["rag", "RAG"],
+    ["pdf", "PDF"],
+    ["codeagentruntime", "CodeAgentRuntime"],
+    ["tool", "tool mode"],
+    ["memory", "memory"],
+    ["session", "session"],
+    ["음악", "음악"],
+    ["옵시디언", "Obsidian"]
+  ];
+  for (const [needle, topic] of pairs) {
+    if (lower.includes(needle)) topics.push(topic);
+  }
+  return Array.from(new Set(topics)).slice(0, 12);
+}
+
+function extractEntities(text) {
+  const entities = new Set();
+  const matches = String(text || "").match(/\b[A-Z][A-Za-z0-9_-]{2,}\b/g) || [];
+  for (const match of matches) entities.add(match);
+  for (const keyword of ["AI Workspace", "Hermes", "CodeAgentRuntime", "docsearch MCP", "Obsidian"]) {
+    if (String(text || "").includes(keyword)) entities.add(keyword);
+  }
+  return Array.from(entities).slice(0, 20);
+}
+
+function extractSentences(text, pattern, limit) {
+  return String(text || "")
+    .split(/(?:\n|[.!?。]|다\.|요\.|음\.|함\.)+/)
+    .map((sentence) => sentence.replace(/^(user|assistant):\s*/i, "").trim())
+    .filter((sentence) => sentence && pattern.test(sentence))
+    .map((sentence) => sentence.slice(0, 240))
+    .slice(0, limit);
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
 }

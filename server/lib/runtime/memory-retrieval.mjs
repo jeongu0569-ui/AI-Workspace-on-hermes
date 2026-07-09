@@ -1,8 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import crypto from "node:crypto";
+import { resolveTimeRange } from "./time-range.mjs";
+
+export const MEMORY_SEARCH_DEFINITION = {
+  type: "function",
+  function: {
+    name: "memory_search",
+    description: "Search long-term user, project, folder, and session-summary memories.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", description: "Memory search query." },
+        currentFolderId: { type: "string" },
+        currentProjectId: { type: "string" },
+        timeRange: { type: "string", description: "today, yesterday, this_week, last_week, last_7_days, or ISO range." },
+        maxResults: { type: "integer", minimum: 1, maximum: 50 }
+      },
+      required: ["query"]
+    }
+  }
+};
 
 export async function searchMemory(workspaceRoot, query, context = {}) {
   const q = String(query || "").toLowerCase();
+  const timeRange = resolveTimeRange(context.timeRange, { now: context.now });
   
   // Sources to collect candidates from:
   // 1. User memories
@@ -89,7 +112,9 @@ export async function searchMemory(workspaceRoot, query, context = {}) {
   } catch {}
 
   // Filter & Score candidates
-  const scored = candidates.map(c => {
+  const scored = candidates
+    .filter((candidate) => isWithinTimeRange(candidate.createdAt, timeRange))
+    .map(c => {
     const score = calculateMemoryScore(c, q, context);
     return { ...c, score };
   });
@@ -99,6 +124,120 @@ export async function searchMemory(workspaceRoot, query, context = {}) {
     .filter(c => !q || c.score > 0.1)
     .sort((a, b) => b.score - a.score || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, context.maxResults || 10);
+}
+
+export async function updateMemoryFromSession(workspaceRoot, session, options = {}) {
+  const candidates = extractMemoryCandidates(session, options);
+  const saved = [];
+  for (const candidate of candidates) {
+    if (candidate.type === "user_memory") saved.push(await saveUserMemory(workspaceRoot, candidate));
+    else if (candidate.type === "project_memory") saved.push(await saveProjectMemory(workspaceRoot, candidate.projectId, candidate));
+    else if (candidate.type === "folder_memory") saved.push(await saveFolderMemory(workspaceRoot, candidate.folderId, candidate));
+    else if (candidate.type === "session_summary_memory") saved.push(await saveSessionSummaryMemory(workspaceRoot, candidate));
+  }
+  return { saved };
+}
+
+export async function readMemoryById(workspaceRoot, memoryId) {
+  const all = [];
+  await collectJsonl(all, path.join(workspaceRoot, ".ai-workspace", "memory", "user", "memories.jsonl"));
+  await collectJsonl(all, path.join(workspaceRoot, ".ai-workspace", "memory", "sessions", "session-summaries.jsonl"));
+  await collectGlobJsonl(all, path.join(workspaceRoot, ".ai-workspace", "memory", "projects"));
+  await collectFolderMemory(all, path.join(workspaceRoot, ".ai-workspace", "memory", "folders"));
+  return all.find((memory) => memory.id === memoryId) || null;
+}
+
+export function extractMemoryCandidates(session, _options = {}) {
+  if (!session || !Array.isArray(session.messages)) return [];
+  const sourceMessageIds = session.messages.map((message, index) => message.id || String(index + 1));
+  const content = [
+    session.summary?.content || "",
+    ...session.messages
+      .filter((message) => ["user", "assistant"].includes(message.role))
+      .slice(-12)
+      .map((message) => message.content || "")
+  ].join("\n").trim();
+  if (!content) return [];
+
+  const tags = extractTags(content);
+  const base = {
+    sourceSessionIds: [session.id].filter(Boolean),
+    sourceMessageIds,
+    tags,
+    createdAt: session.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    pinned: false
+  };
+  const candidates = [];
+
+  if (session.summary?.content) {
+    candidates.push({
+      ...base,
+      id: stableMemoryId("session", session.id || "", session.summary.content),
+      type: "session_summary_memory",
+      content: session.summary.content
+    });
+  }
+
+  const preference = extractPreference(content);
+  if (preference) {
+    candidates.push({
+      ...base,
+      id: stableMemoryId("user", session.id || "", preference),
+      type: "user_memory",
+      content: preference
+    });
+  }
+
+  if (session.projectId && session.summary?.content) {
+    candidates.push({
+      ...base,
+      id: stableMemoryId("project", session.projectId, session.summary.content),
+      type: "project_memory",
+      projectId: session.projectId,
+      content: session.summary.content
+    });
+  }
+
+  if (session.folderId && session.summary?.content) {
+    candidates.push({
+      ...base,
+      id: stableMemoryId("folder", session.folderId, session.summary.content),
+      type: "folder_memory",
+      folderId: session.folderId,
+      content: session.summary.content
+    });
+  }
+
+  return candidates;
+}
+
+export async function saveUserMemory(workspaceRoot, memory) {
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "user", "memories.jsonl");
+  return await upsertJsonl(filePath, normalizeMemory(memory, "user_memory"));
+}
+
+export async function saveProjectMemory(workspaceRoot, projectId, memory) {
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "projects", `project-${safeId(projectId)}.jsonl`);
+  return await upsertJsonl(filePath, normalizeMemory({ ...memory, projectId }, "project_memory"));
+}
+
+export async function saveFolderMemory(workspaceRoot, folderId, memory) {
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "folders", `folder-${safeId(folderId)}.json`);
+  let list = [];
+  try {
+    list = JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch {}
+  const normalized = normalizeMemory({ ...memory, folderId }, "folder_memory");
+  const next = upsertArray(list, normalized);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(next, null, 2) + "\n", "utf8");
+  return normalized;
+}
+
+export async function saveSessionSummaryMemory(workspaceRoot, memory) {
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "sessions", "session-summaries.jsonl");
+  return await upsertJsonl(filePath, normalizeMemory(memory, "session_summary_memory"));
 }
 
 function calculateMemoryScore(candidate, query, context) {
@@ -154,4 +293,117 @@ function calculateMemoryScore(candidate, query, context) {
     userPinnedBoost * 0.05;
 
   return Number(finalScore.toFixed(3));
+}
+
+function isWithinTimeRange(createdAt, range) {
+  if (!range) return true;
+  const time = Date.parse(createdAt || "");
+  if (!Number.isFinite(time)) return true;
+  if (range.from && time < range.from.getTime()) return false;
+  if (range.to && time > range.to.getTime()) return false;
+  return true;
+}
+
+async function upsertJsonl(filePath, memory) {
+  let list = [];
+  try {
+    list = (await fs.readFile(filePath, "utf8")).split("\n").filter(Boolean).map(JSON.parse);
+  } catch {}
+  const next = upsertArray(list, memory);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, next.map((item) => JSON.stringify(item)).join("\n") + "\n", "utf8");
+  return memory;
+}
+
+async function collectJsonl(target, filePath) {
+  try {
+    const rows = (await fs.readFile(filePath, "utf8")).split("\n").filter(Boolean).map(JSON.parse);
+    target.push(...rows);
+  } catch {}
+}
+
+async function collectGlobJsonl(target, dirPath) {
+  let files = [];
+  try {
+    files = await fs.readdir(dirPath);
+  } catch {
+    return;
+  }
+  for (const file of files) {
+    if (file.endsWith(".jsonl")) await collectJsonl(target, path.join(dirPath, file));
+  }
+}
+
+async function collectFolderMemory(target, dirPath) {
+  let files = [];
+  try {
+    files = await fs.readdir(dirPath);
+  } catch {
+    return;
+  }
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      const rows = JSON.parse(await fs.readFile(path.join(dirPath, file), "utf8"));
+      if (Array.isArray(rows)) target.push(...rows);
+    } catch {}
+  }
+}
+
+function upsertArray(list, memory) {
+  const idx = list.findIndex((item) => item.id === memory.id);
+  if (idx >= 0) {
+    list[idx] = { ...list[idx], ...memory, createdAt: list[idx].createdAt || memory.createdAt, updatedAt: new Date().toISOString() };
+    return list;
+  }
+  return [...list, memory];
+}
+
+function normalizeMemory(memory, fallbackType) {
+  const content = String(memory.content || "").trim();
+  return {
+    id: memory.id || stableMemoryId(fallbackType, memory.projectId || memory.folderId || "", content),
+    type: memory.type || fallbackType,
+    content,
+    projectId: memory.projectId || undefined,
+    folderId: memory.folderId || undefined,
+    sourceSessionIds: memory.sourceSessionIds || [],
+    sourceMessageIds: memory.sourceMessageIds || [],
+    tags: memory.tags || [],
+    createdAt: memory.createdAt || new Date().toISOString(),
+    updatedAt: memory.updatedAt || new Date().toISOString(),
+    pinned: Boolean(memory.pinned)
+  };
+}
+
+function stableMemoryId(...parts) {
+  return `memory-${crypto.createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 20)}`;
+}
+
+function extractTags(text) {
+  const tags = [];
+  const lower = String(text || "").toLowerCase();
+  for (const [needle, tag] of [
+    ["ai workspace", "ai-workspace"],
+    ["hermes", "hermes"],
+    ["codex", "code-agent"],
+    ["docsearch", "rag"],
+    ["pdf", "pdf"],
+    ["옵시디언", "obsidian"],
+    ["음악", "music"]
+  ]) {
+    if (lower.includes(needle)) tags.push(tag);
+  }
+  return Array.from(new Set(tags));
+}
+
+function extractPreference(text) {
+  const lines = String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const preferenceLine = lines.find((line) => /선호|원해|원한다|좋아|싫어|prefer|preference|want/i.test(line));
+  if (!preferenceLine) return "";
+  return preferenceLine.slice(0, 500);
+}
+
+function safeId(value) {
+  return String(value || "default").replace(/[^a-zA-Z0-9_.-]/g, "_");
 }

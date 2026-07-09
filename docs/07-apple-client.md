@@ -88,10 +88,10 @@ Implemented:
   state is visible without a manual restart.
 - grouped, collapsible thinking/tool activity rows, one compact activity group per user turn
 - streaming thinking/reasoning deltas coalesced into smooth activity blocks instead of one row per token
-- active activity shimmer while Hermes is still streaming; finished rows show
+- active activity shimmer while AI Workspace is still streaming; finished rows show
   `Done` and stop animating
 - Markdown rendering for assistant answers with a SwiftUI block renderer ported
-  from the Obsidian/Hermes approach: headings, paragraphs, unordered lists,
+  from the earlier Obsidian-style prototype: headings, paragraphs, unordered lists,
   ordered lists, task checkboxes, block quotes, horizontal rules, fenced code
   blocks, and Markdown tables are rendered as distinct UI blocks instead of
   one flat line
@@ -136,9 +136,9 @@ Implemented:
   proposal, approve and immediately run approved checks, and run approved
   checks through the Workspace Server.
 - approval and denial buttons for `approval.request` events
-- normalized Hermes session menu titles instead of raw generated session ids
-- zero-message Hermes sessions are hidden from the client session list
-- the new chat `+` button clears the local chat view but does not create a Hermes session until the first message is sent
+- normalized AI Workspace session menu titles instead of raw generated session ids
+- zero-message AI Workspace sessions are hidden from the client session list
+- the new chat `+` button clears the local chat view but does not create an AI Workspace session until the first message is sent
 - macOS activation fix for `swift run AIWorkspace`, so the launched window becomes the key app for keyboard input
 - compact Notes/Code split view sizing for smaller macOS windows
 - default macOS sidebar toggle only; the custom duplicate sidebar button was removed
@@ -155,7 +155,7 @@ Implemented:
   server connection settings live in a Settings sheet.
 - compact iOS chat controls use short visible labels for access/model/reasoning
   so long provider model names do not expand vertically and fill the screen.
-- the chat composer mirrors the Obsidian Hermes Connection layout more closely:
+- the chat composer mirrors the earlier Obsidian plugin prototype layout more closely:
   new chat and history live in the chat header, while context/access/model/
   reasoning/send controls stay compact in the composer.
 - tapping outside the chat input or scrolling the transcript dismisses the iOS
@@ -233,7 +233,7 @@ POST /api/workspace/sessions
 WS   /api/live
 ```
 
-It should not directly access filesystem paths or Hermes dashboard cookies.
+It should not directly access filesystem paths or external dashboard cookies.
 
 For approval-gated runtime work, the app should treat `approval_required` as a
 normal task state. It can show the related approval from
@@ -346,7 +346,7 @@ The `+` button starts a local blank chat state only. Session creation is
 deferred until the user sends the first message, which avoids empty orphan
 sessions in history.
 
-The session menu refreshes Hermes metadata immediately before opening, and the
+The session menu refreshes AI Workspace session metadata immediately before opening, and the
 History sheet also refreshes on presentation. This mirrors the Obsidian plugin
 behavior: history is synchronized at the moment the user is about to choose or
 manage a session instead of requiring a separate reload button.
@@ -362,7 +362,7 @@ User messages are right-aligned and assistant messages remain left-aligned, so
 chat turns are visually easier to scan.
 
 Assistant answers are rendered by a small SwiftUI Markdown block renderer. The
-renderer follows the same broad approach as the Obsidian plugin and Hermes UI:
+renderer follows the same broad approach as the Obsidian plugin and AI Workspace UI:
 split the text into blocks first, then render headings, paragraphs, lists,
 tasks, quotes, rules, fenced code blocks, and table rows with dedicated views.
 Inline emphasis/code is still handled through Swift
@@ -381,11 +381,11 @@ shell/Dockerfile/Makefile, SQL, JSON/YAML, HTML/XML, CSS, Ruby, PHP, Markdown,
 and fallback code. Markdown tables render in a bordered, horizontally scrollable
 table view with styled header cells when the native Markdown fallback is used.
 
-Hermes Desktop/Web uses a web rendering stack with Markdown components and
-Shiki/Streamdown dependencies available in the Hermes source tree. The Hermes
-TUI has a separate terminal-specific renderer. Neither can be copied directly
-into SwiftUI without a WebView bridge and bundled JavaScript resources. The
-target architecture for Hermes-level rendering quality is:
+Reference desktop/web AI clients commonly use a web rendering stack with
+Markdown components and Shiki/Streamdown-style dependencies. Terminal clients
+use a separate terminal-specific renderer. These cannot be copied directly into
+SwiftUI without a WebView bridge and bundled JavaScript resources. The target
+architecture for high-quality rendering is:
 
 ```text
 RichMarkdownView / CodeBlockView
@@ -421,7 +421,7 @@ CodeFileRenderedView
 ```
 
 The server-rendered path gives Markdown tables and fenced code blocks a much
-closer rendering model to Hermes Desktop. Shiki runs on the Workspace Server,
+closer rendering model to modern desktop AI clients. Shiki runs on the Workspace Server,
 so iOS does not need to bundle a JavaScript highlighter or parse TextMate
 grammars locally.
 
@@ -453,25 +453,25 @@ adding a second filesystem path layer.
 While an activity block is streaming, its collapsed state shows a three-line
 preview of the latest reasoning/tool text and a subtle shimmer. When streaming
 finishes, the shimmer stops and the collapsed row returns to the summary-only
-state. Saved Hermes reasoning is also restored as an activity row when loading
-session history.
+state. Saved AI Workspace reasoning/tool activity is also restored as an
+activity row when loading session history.
 
 Activity rows are not full chat bubbles. They are compact left-aligned progress
 rows so the reasoning/tool stream reads like a process log between the user
 message and the final assistant answer.
 
-The chat composer follows the same compact control model used in the Obsidian
-Hermes plugin:
+The chat composer follows the same compact control model used in the earlier
+Obsidian plugin prototype:
 
 ```text
   History  Safe/Full  Model  Fast/Med/Deep  Send
 ```
 
-`Safe` maps to Hermes `yolo=false`, so dangerous actions still rely on Hermes'
-approval gate. `Full` maps to `yolo=true`, allowing Hermes to proceed without
-that extra approval step where Hermes supports it.
+`Safe` uses the AI Workspace approval policy, so mutating code tools and risky
+MCP actions pause through the approval inbox. `Full` relaxes client-side
+friction but does not bypass server-side hard safety blocks.
 
-The reasoning menu maps to Hermes `config.set key=reasoning`:
+The reasoning menu maps to the prompt/runtime reasoning effort value:
 
 ```text
 Fast -> low
@@ -491,15 +491,14 @@ Workspace
 ```
 
 The client only sends a compact `contextRequest`. The Workspace Server resolves
-the path, decides inline versus RAG/search metadata, and forwards the rendered
-context to Hermes. This keeps filesystem and indexing policy centralized on the
+the path, decides inline versus RAG/search metadata, and forwards compact
+context into the AI Workspace runtime. This keeps filesystem and indexing policy centralized on the
 server instead of duplicating it in each Apple client.
 
-Hermes live RPC currently stores the submitted prompt as one text field. Since
-Workspace context must be included in that text for the model, saved user rows
-can contain both context and the visible user message. When loading history, the
-Apple client extracts the text after `[User message]` and displays only that
-actual user message in the chat UI.
+AI Workspace stores visible user messages separately from compact runtime
+context. The Apple client should render only saved user/assistant messages from
+`/api/sessions/:id/messages`; context, memory, and summaries belong to prompt
+assembly on the server.
 
 ## Xcode Project
 
@@ -532,12 +531,12 @@ For example:
 Terminal support must be designed as a remote server feature, not as a
 client-local shell. iOS/iPadOS cannot spawn a local development terminal, so the
 cross-platform terminal panel should control terminal sessions running on the
-Workspace Server or Hermes server:
+Workspace Server:
 
 ```text
 iOS/macOS terminal panel
   -> Workspace Server terminal API/WebSocket
-  -> server-side shell or Hermes tool session
+  -> server-side shell/tool session
 ```
 
 macOS may later add local-only developer conveniences, but those should be

@@ -60,14 +60,34 @@ Status: in progress.
 - Check command execution with approval: done.
 - Git status/diff capture: done.
 - Task memory accumulation: done.
+- Code-surface tool calls route through `CodeAgentRuntime`: done.
+- Approval-required MCP tool calls propagate to task/approval state and resume only the approved pending tool: done.
 
 Remaining:
 
 - Rich diff viewer.
-- Dedicated approval inbox UI polish.
 - Automatic LLM-authored patch generation through the AI Workspace runtime.
 - Failure-log-based repair loop.
 - Stronger sandbox policy.
+
+## Phase 3.5: Runtime Recall And Tool Modes
+
+Status: in progress.
+
+- Surface-based tool modes: done.
+- Same-turn safe tool discovery: done.
+- Fuzzy conversation search/read: done.
+- Calendar `last_week` and rolling `last_7_days` time ranges: done.
+- Session summaries with topics/decisions/entities/preferences/source ids: done.
+- Long-term user/project/folder/session memory extraction: first pass done.
+- Prompt assembly with summary + recent messages + relevant memory: done.
+- General `[Chat]` overflow archive policy, latest 30 visible: done.
+
+Remaining:
+
+- Stronger semantic memory ranking.
+- Richer folder/project conversation management UI.
+- Embedding-backed recall once native vector indexing matures.
 
 ## Phase 4: Apple Client
 
@@ -79,6 +99,7 @@ Status: in progress.
 - Notes/Code tree: in progress.
 - Markdown/code rendering: in progress.
 - Session/model menus: in progress.
+- Approval/task controls: in progress.
 
 Remaining:
 

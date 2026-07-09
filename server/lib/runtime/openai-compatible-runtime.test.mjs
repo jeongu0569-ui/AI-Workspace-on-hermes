@@ -160,7 +160,7 @@ test("OpenAI-compatible runtime executes workspace search tool calls", async () 
   assert.equal(result.reply, "git pull 설명을 찾았어요.");
   assert.equal(result.toolRounds, 1);
   assert.equal(requests.length, 2);
-  assert.equal(requests[0].tools.length, 3);
+  assert.ok(requests[0].tools.some((tool) => tool.function.name === "workspace_search"));
   const toolMessage = requests[1].messages.find((message) => message.role === "tool");
   assert.equal(toolMessage.name, "workspace_search");
   assert.match(toolMessage.content, /Notes\/git\.md/);
@@ -171,6 +171,111 @@ test("OpenAI-compatible runtime executes workspace search tool calls", async () 
     "message.delta",
     "turn.complete"
   ]);
+});
+
+test("OpenAI-compatible runtime filters tools by surface defaults", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-surface-tools-"));
+  await setDefaultModel(root, "custom", "demo-model");
+  await setCredentialValue(root, "custom", "AIW_CUSTOM_BASE_URL", "http://model.test/v1");
+  await setCredentialValue(root, "custom", "AIW_CUSTOM_API_KEY", "test-key");
+
+  const requests = [];
+  const runtime = new OpenAICompatibleRuntime({
+    workspaceRoot: root,
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return {
+        ok: true,
+        headers: { get: () => "text/event-stream" },
+        body: streamChunks([
+          'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      };
+    }
+  });
+
+  await runtime.submitPrompt({ sessionId: "chat-session", message: "hello", surface: "chat" });
+  await runtime.submitPrompt({ sessionId: "notes-session", message: "search notes", surface: "notes" });
+  await runtime.submitPrompt({ sessionId: "code-session", message: "inspect code", surface: "code" });
+
+  const chatTools = new Set(requests[0].tools.map((tool) => tool.function.name));
+  const notesTools = new Set(requests[1].tools.map((tool) => tool.function.name));
+  const codeTools = new Set(requests[2].tools.map((tool) => tool.function.name));
+
+  assert.equal(chatTools.has("conversation_search"), true);
+  assert.equal(chatTools.has("memory_search"), true);
+  assert.equal(chatTools.has("workspace_search"), false);
+  assert.equal(chatTools.has("search_project"), false);
+
+  assert.equal(notesTools.has("docsearch_search"), true);
+  assert.equal(notesTools.has("read_note_file"), true);
+  assert.equal(notesTools.has("apply_patch"), false);
+
+  assert.equal(codeTools.has("search_project"), true);
+  assert.equal(codeTools.has("apply_patch"), true);
+  assert.equal(codeTools.has("docsearch_search"), false);
+});
+
+test("OpenAI-compatible runtime expands discovered safe tools within the same turn", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-discovery-"));
+  await fs.mkdir(path.join(root, "Notes"), { recursive: true });
+  await fs.writeFile(path.join(root, "Notes", "rag.md"), "docsearch MCP indexes notes and PDFs.", "utf8");
+  await setDefaultModel(root, "custom", "demo-model");
+  await setCredentialValue(root, "custom", "AIW_CUSTOM_BASE_URL", "http://model.test/v1");
+  await setCredentialValue(root, "custom", "AIW_CUSTOM_API_KEY", "test-key");
+
+  const requests = [];
+  const runtime = new OpenAICompatibleRuntime({
+    workspaceRoot: root,
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      if (requests.length === 1) {
+        return {
+          ok: true,
+          headers: { get: () => "text/event-stream" },
+          body: streamChunks([
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_discover","type":"function","function":{"name":"tool_discovery","arguments":"{\\"reason\\":\\"need indexed document search\\",\\"desiredCapability\\":\\"search indexed pdf notes documents\\"}"}}]}}]}\n\n',
+            'data: [DONE]\n\n'
+          ])
+        };
+      }
+      if (requests.length === 2) {
+        return {
+          ok: true,
+          headers: { get: () => "text/event-stream" },
+          body: streamChunks([
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_docsearch","type":"function","function":{"name":"docsearch_search","arguments":"{\\"query\\":\\"docsearch MCP\\",\\"scopePath\\":\\"Notes\\"}"}}]}}]}\n\n',
+            'data: [DONE]\n\n'
+          ])
+        };
+      }
+      return {
+        ok: true,
+        headers: { get: () => "text/event-stream" },
+        body: streamChunks([
+          'data: {"choices":[{"delta":{"content":"docsearch 결과를 확인했어요."}}]}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      };
+    }
+  });
+
+  const result = await runtime.submitPrompt({
+    sessionId: "session-discovery",
+    message: "문서 검색이 필요해",
+    surface: "chat"
+  });
+
+  assert.equal(result.reply, "docsearch 결과를 확인했어요.");
+  assert.equal(result.toolRounds, 2);
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].tools.some((tool) => tool.function.name === "docsearch_search"), false);
+  assert.equal(requests[1].tools.some((tool) => tool.function.name === "docsearch_search"), true);
+  const toolMessages = requests[2].messages.filter((message) => message.role === "tool");
+  assert.equal(toolMessages[0].name, "tool_discovery");
+  assert.equal(toolMessages[1].name, "docsearch_search");
+  assert.match(toolMessages[1].content, /Notes\/rag\.md/);
 });
 
 async function* streamChunks(chunks) {

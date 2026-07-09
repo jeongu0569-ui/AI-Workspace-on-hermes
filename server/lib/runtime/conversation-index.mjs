@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveTimeRange } from "./time-range.mjs";
 
 export async function ensureConversationIndex(workspaceRoot) {
   const dir = path.join(workspaceRoot, ".ai-workspace", "conversation-index");
@@ -85,6 +86,7 @@ export async function indexSession(workspaceRoot, session) {
 export async function searchConversationIndex(workspaceRoot, query, options = {}) {
   const dir = await ensureConversationIndex(workspaceRoot);
   const q = String(query || "").toLowerCase();
+  const tokens = tokenizeQuery(q);
   
   // Read indexing files
   let sessions = [];
@@ -109,18 +111,12 @@ export async function searchConversationIndex(workspaceRoot, query, options = {}
   
   // Time filtering helper
   const parseTime = (val) => new Date(val).getTime();
-  let fromTime = options.timeRange?.from ? parseTime(options.timeRange.from) : null;
-  let toTime = options.timeRange?.to ? parseTime(options.timeRange.to) : null;
-
-  // Presets handling
-  if (typeof options.timeRange === "string") {
-    const now = new Date();
-    if (options.timeRange === "last_week") {
-      fromTime = now.getTime() - 7 * 24 * 3600 * 1000;
-    } else if (options.timeRange === "last_month") {
-      fromTime = now.getTime() - 30 * 24 * 3600 * 1000;
-    }
-  }
+  const resolvedTimeRange = resolveTimeRange(options.timeRange, {
+    now: options.now,
+    timezoneOffsetMs: options.timezoneOffsetMs
+  });
+  let fromTime = resolvedTimeRange?.from ? resolvedTimeRange.from.getTime() : null;
+  let toTime = resolvedTimeRange?.to ? resolvedTimeRange.to.getTime() : null;
 
   // Filter sessions map
   const sessionsMap = new Map(sessions.map(s => [s.id, s]));
@@ -132,15 +128,15 @@ export async function searchConversationIndex(workspaceRoot, query, options = {}
     if (sessionObj.searchable === false) continue;
     
     // Apply filters
-    const sessionTime = parseTime(sessionObj.createdAt);
+    const sessionTime = parseTime(s.updatedAt || sessionObj.updatedAt || sessionObj.createdAt);
     if (fromTime && sessionTime < fromTime) continue;
     if (toTime && sessionTime > toTime) continue;
     if (options.folderId && sessionObj.folderId !== options.folderId) continue;
     if (options.projectId && sessionObj.projectId !== options.projectId) continue;
     
     const content = s.summary.toLowerCase();
-    if (!q || content.includes(q)) {
-      const score = calculateScore(s.summary, q, sessionObj, options);
+    const score = calculateScore(s.summary, q, sessionObj, { ...options, queryTokens: tokens });
+    if (!q || score >= 0.18 || content.includes(q)) {
       results.push({
         type: "session_summary",
         sessionId: s.sessionId,
@@ -160,15 +156,15 @@ export async function searchConversationIndex(workspaceRoot, query, options = {}
     if (sessionObj.searchable === false) continue;
 
     // Apply filters
-    const sessionTime = parseTime(sessionObj.createdAt);
+    const sessionTime = parseTime(m.createdAt || sessionObj.updatedAt || sessionObj.createdAt);
     if (fromTime && sessionTime < fromTime) continue;
     if (toTime && sessionTime > toTime) continue;
     if (options.folderId && sessionObj.folderId !== options.folderId) continue;
     if (options.projectId && sessionObj.projectId !== options.projectId) continue;
 
     const content = m.content.toLowerCase();
-    if (!q || content.includes(q)) {
-      const score = calculateScore(m.content, q, sessionObj, options);
+    const score = calculateScore(m.content, q, sessionObj, { ...options, queryTokens: tokens });
+    if (!q || score >= 0.18 || content.includes(q)) {
       results.push({
         type: "session_message",
         sessionId: m.sessionId,
@@ -191,7 +187,7 @@ export async function searchConversationIndex(workspaceRoot, query, options = {}
 function calculateScore(text, query, session, options = {}) {
   // 1. Semantic/Keyword Similarity (45%)
   let similarity = 0;
-  const words = query.split(/\s+/).filter(Boolean);
+  const words = options.queryTokens || tokenizeQuery(query);
   if (words.length > 0) {
     let matchCount = 0;
     const lowerText = text.toLowerCase();
@@ -207,7 +203,8 @@ function calculateScore(text, query, session, options = {}) {
   const keywordMatch = text.toLowerCase().includes(query.toLowerCase()) ? 1.0 : 0.0;
 
   // 3. Recency Weight (15%)
-  const ageInMs = Date.now() - new Date(session.createdAt).getTime();
+  const now = options.now ? new Date(options.now).getTime() : Date.now();
+  const ageInMs = now - new Date(session.updatedAt || session.createdAt).getTime();
   const ageInDays = ageInMs / (24 * 3600 * 1000);
   let recencyWeight = 0.2;
   if (ageInDays <= 1) recencyWeight = 1.0;
@@ -236,6 +233,29 @@ function calculateScore(text, query, session, options = {}) {
   return Number(finalScore.toFixed(3));
 }
 
+export function tokenizeQuery(query) {
+  const stopwords = new Set([
+    "내가", "나는", "저는", "우리", "뭐였지", "뭐야", "무엇", "어떤", "있나", "있어",
+    "저번주", "이번주", "지난주", "오늘", "어제", "찾아", "검색", "관련", "대화",
+    "the", "a", "an", "is", "are", "was", "were", "what", "when", "where", "about"
+  ]);
+  return Array.from(new Set(
+    String(query || "")
+      .toLowerCase()
+      .split(/[^a-zA-Z0-9가-힣_/-]+/)
+      .map(normalizeToken)
+      .filter((token) => token.length >= 2 && !stopwords.has(token))
+  ));
+}
+
+function normalizeToken(token) {
+  let value = String(token || "").trim();
+  value = value.replace(/(이었|였|었|았|했던|하던|하였|하는|하다|했고|합니다|했어|했음|였다|였다가)$/u, "");
+  value = value.replace(/(으로|에서|에게|한테|부터|까지|처럼|보다|이고|하고|이며|이랑|랑|은|는|이|가|을|를|에|의|도|만|과|와)$/u, "");
+  if (value === "들었" || value === "들은" || value === "듣던") return "들";
+  return value;
+}
+
 export async function readConversationMessages(workspaceRoot, sessionId, messageIds = [], options = {}) {
   const sessionPath = path.join(workspaceRoot, ".ai-workspace", "sessions", `${sessionId}.json`);
   let session = null;
@@ -255,15 +275,16 @@ export async function readConversationMessages(workspaceRoot, sessionId, message
   const msgs = session.messages;
 
   msgs.forEach((m, idx) => {
-    const msgId = String(idx + 1); // Normalizing message indices to match conversation_search results
+    const msgId = String(m.id || idx + 1);
     if (requestedIds.size === 0 || requestedIds.has(msgId)) {
       if (options.includeSurroundingMessages) {
         const window = options.surroundingWindow || 4;
         const start = Math.max(0, idx - window);
         const end = Math.min(msgs.length - 1, idx + window);
         for (let i = start; i <= end; i++) {
+          const windowMsgId = String(msgs[i].id || i + 1);
           results.push({
-            id: String(i + 1),
+            id: windowMsgId,
             role: msgs[i].role,
             content: msgs[i].content,
             createdAt: msgs[i].createdAt,
@@ -289,6 +310,9 @@ export async function readConversationMessages(workspaceRoot, sessionId, message
     if (!seenIds.has(m.id)) {
       seenIds.add(m.id);
       uniqueResults.push(m);
+    } else if (m.isTarget) {
+      const existing = uniqueResults.find((item) => item.id === m.id);
+      if (existing) existing.isTarget = true;
     }
   });
 

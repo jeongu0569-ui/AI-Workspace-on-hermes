@@ -209,6 +209,10 @@ async function ensureWorkspace() {
     files: {},
     indexes: {}
   });
+  try {
+    const { archiveOverflowGeneralSessions } = await import("./lib/runtime/session-archive.mjs");
+    await archiveOverflowGeneralSessions(WORKSPACE_ROOT, { limit: 30 });
+  } catch {}
 }
 
 async function writeJsonIfMissing(filePath, value) {
@@ -520,15 +524,27 @@ async function handleRequest(req, res) {
       const { listArchivedSessions } = await import("./lib/runtime/session-archive.mjs");
       return sendJson(res, await listArchivedSessions(WORKSPACE_ROOT));
     }
+    if (req.method === "POST" && url.pathname === "/api/sessions/archive-expired") {
+      const body = await readJsonBody(req).catch(() => ({}));
+      const { archiveOverflowGeneralSessions } = await import("./lib/runtime/session-archive.mjs");
+      return sendJson(res, await archiveOverflowGeneralSessions(WORKSPACE_ROOT, {
+        limit: body.limit || 30
+      }));
+    }
+    const sessionSummarizeMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/summarize$/);
+    if (req.method === "POST" && sessionSummarizeMatch) {
+      return sendJson(res, await summarizeSession(sessionSummarizeMatch[1]));
+    }
 
     // --- Long-Term Memory Search & CRUD ---
     if (req.method === "GET" && url.pathname === "/api/memory/search") {
       const query = url.searchParams.get("query") || "";
       const currentFolderId = url.searchParams.get("currentFolderId") || "";
       const currentProjectId = url.searchParams.get("currentProjectId") || "";
+      const timeRange = url.searchParams.get("timeRange") || "";
       const maxResults = parseInt(url.searchParams.get("maxResults") || "10", 10);
       const { searchMemory } = await import("./lib/runtime/memory-retrieval.mjs");
-      return sendJson(res, await searchMemory(WORKSPACE_ROOT, query, { currentFolderId, currentProjectId, maxResults }));
+      return sendJson(res, await searchMemory(WORKSPACE_ROOT, query, { currentFolderId, currentProjectId, timeRange, maxResults }));
     }
     if (req.method === "POST" && url.pathname === "/api/memory") {
       const body = await readJsonBody(req);
@@ -544,9 +560,19 @@ async function handleRequest(req, res) {
       await saveUserMemories(memories);
       return sendJson(res, newMemory, 201);
     }
+    if (req.method === "POST" && url.pathname === "/api/memory/extract-from-session") {
+      const body = await readJsonBody(req);
+      return sendJson(res, await extractMemoryFromSession(body.sessionId));
+    }
     const memoryMatch = url.pathname.match(/^\/api\/memory\/([^/]+)$/);
     if (memoryMatch) {
       const memoryId = decodeURIComponent(memoryMatch[1]);
+      if (req.method === "GET") {
+        const { readMemoryById } = await import("./lib/runtime/memory-retrieval.mjs");
+        const memory = await readMemoryById(WORKSPACE_ROOT, memoryId);
+        if (!memory) return sendJson(res, { ok: false, error: "Memory not found." }, 404);
+        return sendJson(res, memory);
+      }
       if (req.method === "PATCH") {
         const body = await readJsonBody(req);
         const memories = await getUserMemories();
@@ -1317,6 +1343,29 @@ async function rejectCodeTaskPatch(taskId, proposalId, req) {
   } finally {
     engine.close();
   }
+}
+
+async function summarizeSession(sessionIdParam) {
+  const sessionId = decodeURIComponent(sessionIdParam);
+  const filePath = path.join(WORKSPACE_ROOT, ".ai-workspace", "sessions", `${sessionId}.json`);
+  const session = JSON.parse(await fs.readFile(filePath, "utf8"));
+  const { buildSessionSummary } = await import("./lib/session-runtime.mjs");
+  const summary = buildSessionSummary(session);
+  session.summary = summary;
+  session.updatedAt = new Date().toISOString();
+  await fs.writeFile(filePath, JSON.stringify(session, null, 2), "utf8");
+  const { indexSession } = await import("./lib/runtime/conversation-index.mjs");
+  await indexSession(WORKSPACE_ROOT, session);
+  return { ok: true, sessionId, summary };
+}
+
+async function extractMemoryFromSession(sessionIdParam) {
+  const sessionId = String(sessionIdParam || "").trim();
+  if (!sessionId) throw Object.assign(new Error("sessionId is required."), { status: 400 });
+  const filePath = path.join(WORKSPACE_ROOT, ".ai-workspace", "sessions", `${sessionId}.json`);
+  const session = JSON.parse(await fs.readFile(filePath, "utf8"));
+  const { updateMemoryFromSession } = await import("./lib/runtime/memory-retrieval.mjs");
+  return await updateMemoryFromSession(WORKSPACE_ROOT, session);
 }
 
 async function renderMarkdown(req) {

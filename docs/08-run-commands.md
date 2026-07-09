@@ -140,17 +140,36 @@ aiw auth set custom AIW_CUSTOM_API_KEY local-dev-key
 ```
 
 When the selected model supports OpenAI-compatible tool calls, AI Workspace
-also offers read-only workspace tools:
+filters tools by surface:
 
 ```text
-workspace_search
-workspace_read_file
-workspace_list_tree
+chat:
+  conversation_search
+  conversation_read
+  memory_search
+  tool_discovery
+
+notes:
+  workspace_search
+  docsearch_search
+  read_note_file
+  read_file_metadata
+
+code:
+  search_project
+  read_project_file
+  inspect_git
+  get_git_diff
+  propose_patch
+  apply_patch        (approval-gated)
+  run_checks         (approval-gated)
+  run_git_command    (approval-gated)
 ```
 
 These tools run inside the Workspace Server, so the client can show
 `tool.start` / `tool.complete` activity without handing raw filesystem access
-to the model provider.
+to the model provider. `tool_discovery` can temporarily add safe tools to the
+current turn, but it does not auto-enable approval-gated tools.
 
 ## Workspace APIs
 
@@ -159,6 +178,8 @@ curl http://127.0.0.1:8787/api/tree?root=notes
 curl http://127.0.0.1:8787/api/models
 curl http://127.0.0.1:8787/api/sessions
 curl http://127.0.0.1:8787/api/doctor
+curl http://127.0.0.1:8787/api/tool-modes
+curl http://127.0.0.1:8787/api/tools/available
 ```
 
 Create a session:
@@ -190,6 +211,33 @@ Runtime work that needs approval, such as a policy-gated MCP tool call, is
 stored as `approval_required` instead of blocking the server while it waits.
 After approval, `aiw tasks resume <taskId>` or
 `POST /api/agent/approvals/:id/respond` can continue the saved pending state.
+
+General `[Chat]` sessions that are not attached to a folder or project are
+kept as a rolling visible set. The latest 30 remain in the sidebar; older
+overflow is archived. Pinned sessions and sessions with pending approvals are
+not auto-archived.
+
+Conversation search/read examples:
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/conversations/search \
+  -H 'content-type: application/json' \
+  -d '{"query":"저번주에 들었던 음악","timeRange":"last_week"}'
+
+curl -X POST http://127.0.0.1:8787/api/conversations/read \
+  -H 'content-type: application/json' \
+  -d '{"sessionId":"session-...","messageIds":["1"],"includeSurroundingMessages":true}'
+```
+
+Memory search/extraction examples:
+
+```bash
+curl 'http://127.0.0.1:8787/api/memory/search?query=dark%20mode&maxResults=5'
+
+curl -X POST http://127.0.0.1:8787/api/memory/extract-from-session \
+  -H 'content-type: application/json' \
+  -d '{"sessionId":"session-..."}'
+```
 
 Manual patch proposal:
 

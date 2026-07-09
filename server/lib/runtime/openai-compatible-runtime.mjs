@@ -154,10 +154,14 @@ export class OpenAICompatibleRuntime extends EventEmitter {
   async runChatLoop(selection, messages, params) {
     let reply = "";
     let toolRounds = 0;
+    let activeParams = {
+      ...params,
+      expandedToolsForThisTurn: [...(params.expandedToolsForThisTurn || [])]
+    };
     const maxToolRounds = clampNumber(params.maxToolRounds, 0, 6, 3);
 
     for (let round = 0; round <= maxToolRounds; round += 1) {
-      const result = await this.requestChatCompletion(selection, messages, params);
+      const result = await this.requestChatCompletion(selection, messages, activeParams);
       reply += result.text;
       if (!result.toolCalls.length) {
         return { reply, toolRounds };
@@ -178,7 +182,10 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       });
 
       for (const call of result.toolCalls) {
-        const toolResult = await this.executeToolCall(call, params);
+        const toolResult = await this.executeToolCall(call, activeParams);
+        if (call.name === "tool_discovery") {
+          activeParams = expandToolsForTurn(activeParams, toolResult);
+        }
         messages.push({
           role: "tool",
           tool_call_id: call.id,
@@ -206,9 +213,11 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     const { getEffectiveToolMode } = await import("./tool-mode-registry.mjs");
     const { TOOL_DISCOVERY_DEFINITION } = await import("./tool-discovery.mjs");
     const { CONVERSATION_SEARCH_DEFINITION, CONVERSATION_READ_DEFINITION } = await import("./conversation-tools.mjs");
+    const { MEMORY_SEARCH_DEFINITION } = await import("./memory-retrieval.mjs");
 
     const effectiveMode = await getEffectiveToolMode(this.workspaceRoot, params.surface || "chat");
     const enabledTools = new Set(effectiveMode.enabledTools || []);
+    const expandedTools = new Set(params.expandedToolsForThisTurn || []);
 
     const activeTools = [...WORKSPACE_TOOL_DEFINITIONS];
     
@@ -222,6 +231,9 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       }
       if (!activeTools.some(t => t.function.name === "conversation_read")) {
         activeTools.push(CONVERSATION_READ_DEFINITION);
+      }
+      if (!activeTools.some(t => t.function.name === "memory_search")) {
+        activeTools.push(MEMORY_SEARCH_DEFINITION);
       }
     }
 
@@ -278,7 +290,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
         return false;
       }
       if (params.surface) {
-        return enabledTools.has(name);
+        return enabledTools.has(name) || expandedTools.has(name);
       }
       return true;
     });
@@ -342,6 +354,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     const { getEffectiveToolMode } = await import("./tool-mode-registry.mjs");
     const effectiveMode = await getEffectiveToolMode(this.workspaceRoot, params.surface || "chat");
     const enabledTools = new Set(effectiveMode.enabledTools || []);
+    const expandedTools = new Set(params.expandedToolsForThisTurn || []);
     const mandatory = new Set(["tool_discovery", "conversation_search", "conversation_read"]);
 
     // Check if tool is disabled in config first
@@ -361,7 +374,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     }
 
     // Gating check by tool modes (only when surface is specified)
-    if (params.surface && !mandatory.has(call.name) && !enabledTools.has(call.name)) {
+    if (params.surface && !mandatory.has(call.name) && !enabledTools.has(call.name) && !expandedTools.has(call.name)) {
       const errorMsg = `Tool '${call.name}' is not enabled in current mode.`;
       this.emit("event", {
         type: "tool.error",
@@ -382,6 +395,10 @@ export class OpenAICompatibleRuntime extends EventEmitter {
         type: "workspace.tool.call",
         sessionId: params.sessionId,
         taskId: params.taskId,
+        surface: params.surface || null,
+        folderId: params.folderId || null,
+        projectId: params.projectId || null,
+        expandedToolsForThisTurn: params.expandedToolsForThisTurn || [],
         toolCall: call,
         toolName: call.name,
         arguments: call.arguments,
@@ -556,15 +573,30 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       const args = typeof call.arguments === "string" ? JSON.parse(call.arguments || "{}") : call.arguments;
       if (call.name === "tool_discovery") {
         const { executeToolDiscovery } = await import("./tool-discovery.mjs");
-        result = await executeToolDiscovery(this.workspaceRoot, params.surface || "chat", args);
+        result = await executeToolDiscovery(this.workspaceRoot, params.surface || "chat", {
+          ...args,
+          taskId: params.taskId
+        });
       } else if (call.name === "conversation_search") {
         const { executeConversationSearch } = await import("./conversation-tools.mjs");
         result = await executeConversationSearch(this.workspaceRoot, args);
       } else if (call.name === "conversation_read") {
         const { executeConversationRead } = await import("./conversation-tools.mjs");
         result = await executeConversationRead(this.workspaceRoot, args);
+      } else if (call.name === "memory_search") {
+        const { searchMemory } = await import("./memory-retrieval.mjs");
+        result = {
+          results: await searchMemory(this.workspaceRoot, args.query || "", {
+            ...args,
+            currentFolderId: args.currentFolderId || params.folderId || params.context?.workspaceContext?.workspace?.folderId,
+            currentProjectId: args.currentProjectId || params.projectId || params.context?.workspaceContext?.workspace?.projectId
+          })
+        };
       } else {
-        result = await executeWorkspaceTool(this.workspaceRoot, call.name, call.arguments);
+        result = await executeWorkspaceTool(this.workspaceRoot, call.name, call.arguments, {
+          codeRuntime: params.codeRuntime,
+          approved: params.approved === true
+        });
       }
       this.emit("event", {
         type: "tool.complete",
@@ -577,6 +609,9 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       });
       return result;
     } catch (error) {
+      if (error?.approvalRequired) {
+        throw error;
+      }
       const result = {
         ok: false,
         error: error?.message || "Tool execution failed."
@@ -621,6 +656,11 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     const result = await this.executeToolCall(pendingState.toolCall, {
       sessionId: pendingState.sessionId || params.sessionId,
       taskId: pendingState.taskId || params.taskId,
+      surface: pendingState.surface || params.surface,
+      folderId: pendingState.folderId || params.folderId,
+      projectId: pendingState.projectId || params.projectId,
+      expandedToolsForThisTurn: pendingState.expandedToolsForThisTurn || params.expandedToolsForThisTurn || [],
+      codeRuntime: params.codeRuntime,
       approved: true
     });
     return {
@@ -670,6 +710,21 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     ];
 
     const workspace = context.workspace || {};
+    if (params.sessionSummary?.content) {
+      parts.push("Current session summary:");
+      parts.push(String(params.sessionSummary.content));
+      if (Array.isArray(params.sessionSummary.decisions) && params.sessionSummary.decisions.length) {
+        parts.push(`Session decisions: ${params.sessionSummary.decisions.slice(0, 6).join(" / ")}`);
+      }
+    }
+
+    if (Array.isArray(params.memoryResults) && params.memoryResults.length) {
+      parts.push("Relevant long-term memory:");
+      for (const memory of params.memoryResults.slice(0, 8)) {
+        parts.push(`- [${memory.type || "memory"}] ${memory.content || ""}`);
+      }
+    }
+
     if (workspace.scopeType || workspace.scopePath || workspace.activePath) {
       parts.push(`Workspace scope: ${workspace.scopeType || "none"}`);
       if (workspace.scopePath) parts.push(`Scope path: ${workspace.scopePath}`);
@@ -847,6 +902,21 @@ function buildSystemMessage(params) {
   ];
 
   const workspace = context.workspace || {};
+  if (params.sessionSummary?.content) {
+    parts.push("Current session summary:");
+    parts.push(String(params.sessionSummary.content));
+    if (Array.isArray(params.sessionSummary.decisions) && params.sessionSummary.decisions.length) {
+      parts.push(`Session decisions: ${params.sessionSummary.decisions.slice(0, 6).join(" / ")}`);
+    }
+  }
+
+  if (Array.isArray(params.memoryResults) && params.memoryResults.length) {
+    parts.push("Relevant long-term memory:");
+    for (const memory of params.memoryResults.slice(0, 8)) {
+      parts.push(`- [${memory.type || "memory"}] ${memory.content || ""}`);
+    }
+  }
+
   if (workspace.scopeType || workspace.scopePath || workspace.activePath) {
     parts.push(`Workspace scope: ${workspace.scopeType || "none"}`);
     if (workspace.scopePath) parts.push(`Scope path: ${workspace.scopePath}`);
@@ -988,6 +1058,20 @@ function clampNumber(value, min, max, fallback) {
   const number = Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, number));
+}
+
+function expandToolsForTurn(params, toolResult = {}) {
+  const current = new Set(params.expandedToolsForThisTurn || []);
+  const discovered = toolResult.expandedToolsForThisTurn
+    || toolResult.recommendation?.enableForThisTurn
+    || [];
+  for (const name of discovered) {
+    if (name) current.add(String(name));
+  }
+  return {
+    ...params,
+    expandedToolsForThisTurn: Array.from(current)
+  };
 }
 
 function trimTrailingSlash(value) {

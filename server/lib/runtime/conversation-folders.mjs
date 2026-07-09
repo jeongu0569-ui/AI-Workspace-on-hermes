@@ -57,11 +57,9 @@ export async function deleteFolder(workspaceRoot, folderId) {
   const filtered = folders.filter(f => f.id !== folderId);
   const filePath = path.join(workspaceRoot, ".ai-workspace", "conversation-folders", "folders.json");
   await fs.writeFile(filePath, JSON.stringify(filtered, null, 2), "utf8");
-  
-  // Optional: clear folder memory file
-  const memPath = path.join(workspaceRoot, ".ai-workspace", "memory", "folders", `folder-${folderId}.json`);
-  await fs.unlink(memPath).catch(() => {});
-  return { ok: true };
+
+  const unassignedSessions = await unassignFolderSessions(workspaceRoot, folderId);
+  return { ok: true, unassignedSessions };
 }
 
 export async function getFolderMemory(workspaceRoot, folderId) {
@@ -103,4 +101,31 @@ export async function moveSessionToFolder(workspaceRoot, sessionId, folderId) {
   await indexSession(workspaceRoot, session);
   
   return session;
+}
+
+async function unassignFolderSessions(workspaceRoot, folderId) {
+  const sessionsDir = path.join(workspaceRoot, ".ai-workspace", "sessions");
+  let files = [];
+  try {
+    files = await fs.readdir(sessionsDir);
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    const sessionPath = path.join(sessionsDir, file);
+    try {
+      const session = JSON.parse(await fs.readFile(sessionPath, "utf8"));
+      if (session.folderId !== folderId) continue;
+      session.folderId = null;
+      session.kind = session.projectId ? "project" : "general";
+      session.updatedAt = new Date().toISOString();
+      await fs.writeFile(sessionPath, JSON.stringify(session, null, 2), "utf8");
+      const { indexSession } = await import("./conversation-index.mjs");
+      await indexSession(workspaceRoot, session);
+      count += 1;
+    } catch {}
+  }
+  return count;
 }

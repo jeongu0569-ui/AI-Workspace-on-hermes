@@ -72,6 +72,9 @@ Runtime state lives under:
 │   ├── config.yaml
 │   └── auth.json
 ├── sessions/
+├── conversation-index/
+├── conversation-folders/
+├── tool-modes/
 ├── tasks/
 ├── memory/
 ├── approvals/
@@ -144,13 +147,34 @@ The runtime backend is an OpenAI-compatible native engine under `server/lib/runt
 
 Assistant replies are persisted from the same streaming events that power the live UI. The engine buffers `message.delta` events by session/task and writes a single assistant message to `.ai-workspace/sessions` on `turn.complete`, with a non-streaming result fallback for models that only return final text.
 
-The native runtime also exposes a first read-only tool registry:
+The native runtime exposes surface-filtered tools:
 
-- `workspace_search`: search workspace text files.
-- `workspace_read_file`: read a workspace-relative text, markdown, or code file.
-- `workspace_list_tree`: list files and folders under a workspace path.
+- Chat surface: `conversation_search`, `conversation_read`, `memory_search`, `tool_discovery`.
+- Notes surface: `workspace_search`, `docsearch_search`, `read_note_file`, `read_file_metadata`.
+- Code surface: `search_project`, `read_project_file`, `inspect_git`, `get_git_diff`, `propose_patch`, `apply_patch`, `run_checks`, `run_git_command`.
+
+Code-surface tools route through `CodeAgentRuntime`. Mutating or command-running
+tools are approval-gated by the tool mode and approval inbox.
+
+`tool_discovery` can expand safe tools for the current turn only. This lets a
+plain chat discover note search when the user asks a broad workspace question
+without permanently enabling every tool in every chat.
 
 Tool calls are executed by AI Workspace itself, emitted as `tool.start`, `tool.complete`, or `tool.error` live events, then passed back to the model as tool results before the final assistant message is streamed.
+
+Prompt assembly uses compact context:
+
+```text
+system/runtime instructions
+session summary
+relevant long-term memory
+recent visible user/assistant messages
+current user message
+```
+
+The runtime does not paste the entire historical transcript into every request.
+Session summaries and extracted memory are stored under `.ai-workspace` and
+updated as sessions are written.
 
 MCP tool calls that need user approval no longer block the runtime stream while
 the server polls for a decision. The runtime now creates an approval request,
@@ -158,3 +182,7 @@ marks the owning task as `approval_required`, stores a compact `pendingState`,
 and returns control to the client. Approval resumes the saved task state through
 the Workspace Agent Engine; rejection or cancellation resolves the task without
 executing the pending MCP tool call.
+
+Unscoped general `[Chat]` sessions are kept to the latest 30 visible sidebar
+items. Older overflow is archived, while project/folder/pinned/pending-approval
+sessions stay visible.

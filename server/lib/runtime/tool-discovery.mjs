@@ -101,12 +101,15 @@ export const TOOL_REGISTRY = [
 
 export async function executeToolDiscovery(workspaceRoot, surface, args = {}) {
   const desiredCapability = String(args.desiredCapability || "").toLowerCase();
-  const queryWords = desiredCapability.split(/\s+/).filter(Boolean);
+  const queryWords = desiredCapability
+    .split(/[^a-zA-Z0-9가-힣_/-]+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 2);
   
   // Find matching tool groups based on desiredCapability keywords or description match
   const matchedTools = TOOL_REGISTRY.filter(tool => {
     if (queryWords.length === 0) return false;
-    return queryWords.every(word => {
+    return queryWords.some(word => {
       const inName = tool.name.toLowerCase().includes(word);
       const inDesc = tool.description.toLowerCase().includes(word);
       const inGroup = tool.group.toLowerCase().includes(word);
@@ -142,6 +145,9 @@ export async function executeToolDiscovery(workspaceRoot, surface, args = {}) {
     .slice(0, 3);
 
   return {
+    taskId: args.taskId || null,
+    expandedToolsForThisTurn: recommendTools,
+    reason: `Found tools matching your request for '${desiredCapability}'`,
     availableToolGroups,
     recommendation: {
       enableForThisTurn: recommendTools,

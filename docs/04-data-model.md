@@ -133,6 +133,15 @@ Current implemented files:
 .ai-workspace/tool-logs/live-events.jsonl
 .ai-workspace/tool-logs/tool-events.jsonl
 .ai-workspace/index/files.json
+.ai-workspace/conversation-index/sessions.jsonl
+.ai-workspace/conversation-index/summaries.jsonl
+.ai-workspace/conversation-index/messages.jsonl
+.ai-workspace/conversation-folders/folders.json
+.ai-workspace/tool-modes/user-overrides.json
+.ai-workspace/memory/user/memories.jsonl
+.ai-workspace/memory/projects/project-<id>.jsonl
+.ai-workspace/memory/folders/folder-<id>.json
+.ai-workspace/memory/sessions/session-summaries.jsonl
 .ai-workspace/audit/audit.jsonl
 ```
 
@@ -153,9 +162,34 @@ Workspace sessions are saved under `.ai-workspace/sessions/<sessionId>.json` so 
   "updatedAt": "2026-07-09T02:00:00Z",
   "source": "workspace",
   "runtime": "chat-runtime",
-  "isActive": true
+  "isActive": true,
+  "kind": "general",
+  "surface": "chat",
+  "folderId": null,
+  "projectId": null,
+  "visibleInSidebar": true,
+  "archivedAt": null,
+  "summary": {
+    "content": "주제: AI Workspace, RAG\n결정: ...",
+    "topics": ["AI Workspace", "RAG"],
+    "entities": ["AI Workspace"],
+    "decisions": ["..."],
+    "preferences": ["..."],
+    "sourceMessageIds": ["1", "2"],
+    "coveredMessageIds": ["1", "2"],
+    "updatedAt": "2026-07-09T02:00:00Z"
+  }
 }
 ```
+
+The session summary is generated from visible user/assistant messages. It is
+not a placeholder title. Prompt assembly uses the summary plus recent visible
+messages and relevant memory instead of pasting all historical turns.
+
+General unscoped `[Chat]` sessions use count-based sidebar retention. The
+latest 30 visible general sessions remain visible; older overflow is archived.
+Folder, project, pinned, active-code-task, and pending-approval sessions are
+exempt from this overflow rule.
 
 Task records currently store:
 
@@ -239,6 +273,70 @@ The approval inbox is workspace-owned. Code patch/check approvals can be listed,
 resumed, approved, or rejected even if the chat stream is no longer visible.
 MCP tool-call approvals use the same inbox. Approving one resumes the stored
 task state; rejecting one records the decision and fails the waiting task.
+
+## Tool Modes And Discovery State
+
+Tool mode overrides live under:
+
+```text
+.ai-workspace/tool-modes/user-overrides.json
+```
+
+Default modes are code-defined and surface-scoped:
+
+```text
+chat  -> conversation/memory/discovery tools
+notes -> workspace/docsearch/read-note/file-metadata tools
+code  -> CodeAgentRuntime search/read/git/patch/check tools
+```
+
+`tool_discovery` returns safe `expandedToolsForThisTurn` values. This expansion
+is per-turn runtime state and is not persisted as a user setting. Approval
+tools stay gated by `requiresApproval`.
+
+## Conversation Index And Memory
+
+Conversation search index files:
+
+```text
+.ai-workspace/conversation-index/sessions.jsonl
+.ai-workspace/conversation-index/summaries.jsonl
+.ai-workspace/conversation-index/messages.jsonl
+```
+
+The index is derived from `.ai-workspace/sessions/*.json`. It can be rebuilt
+from session files and should not become the sole source of conversation data.
+
+Long-term memory files:
+
+```text
+.ai-workspace/memory/user/memories.jsonl
+.ai-workspace/memory/projects/project-<id>.jsonl
+.ai-workspace/memory/folders/folder-<id>.json
+.ai-workspace/memory/sessions/session-summaries.jsonl
+```
+
+Memory rows use this common shape:
+
+```json
+{
+  "id": "memory-...",
+  "type": "user_memory",
+  "content": "사용자는 다크 모드 UI를 좋아한다.",
+  "projectId": "project-alpha",
+  "folderId": "folder-notes",
+  "sourceSessionIds": ["session-..."],
+  "sourceMessageIds": ["1", "2"],
+  "tags": ["ai-workspace"],
+  "createdAt": "2026-07-09T02:00:00Z",
+  "updatedAt": "2026-07-09T02:00:00Z",
+  "pinned": false
+}
+```
+
+Memory extraction currently uses deterministic heuristics from session summary
+and recent user/assistant messages. The store is intentionally simple so a
+future embedding-backed memory ranker can replace only the retrieval layer.
 
 Security audit records currently store:
 

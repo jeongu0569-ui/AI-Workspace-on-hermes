@@ -25,3 +25,15 @@ test("Tool Discovery: match case insensitive and return empty for unmatched", as
   assert.equal(res.availableToolGroups.length, 0);
   assert.equal(res.recommendation.enableForThisTurn.length, 0);
 });
+
+test("Tool Discovery: does not auto-enable approval-gated tools", async () => {
+  const res = await executeToolDiscovery("/tmp", "chat", {
+    reason: "need edits",
+    desiredCapability: "apply patch and run git command"
+  });
+
+  assert.ok(res.availableToolGroups.some((group) => group.requiresApproval));
+  assert.equal(res.expandedToolsForThisTurn.includes("apply_patch"), false);
+  assert.equal(res.expandedToolsForThisTurn.includes("run_git_command"), false);
+  assert.equal(res.recommendation.enableForThisTurn.includes("apply_patch"), false);
+});

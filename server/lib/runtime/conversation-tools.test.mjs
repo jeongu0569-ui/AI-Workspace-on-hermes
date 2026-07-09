@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { indexSession } from "./conversation-index.mjs";
+import { indexSession, searchConversationIndex, readConversationMessages } from "./conversation-index.mjs";
 import { executeConversationSearch, executeConversationRead } from "./conversation-tools.mjs";
 
 test("Conversation Tools: index, search and read", async () => {
@@ -57,4 +57,137 @@ test("Conversation Tools: index, search and read", async () => {
   assert.equal(readResult.sessionId, "session-123");
   assert.ok(readResult.messages.length > 0);
   assert.ok(readResult.messages.some(m => m.content.includes("clamshell")));
+});
+
+test("Conversation Tools: fuzzy keyword recall does not require exact phrase match", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-conversation-fuzzy-"));
+  await fs.mkdir(path.join(root, ".ai-workspace", "sessions"), { recursive: true });
+
+  const session = {
+    id: "session-music",
+    title: "음악 이야기",
+    kind: "general",
+    createdAt: "2026-07-07T12:00:00+09:00",
+    updatedAt: "2026-07-07T12:30:00+09:00",
+    messages: [
+      { id: "u1", role: "user", content: "지난주에 재즈 음악을 들었다", createdAt: "2026-07-07T12:00:00+09:00" },
+      { id: "a1", role: "assistant", content: "재즈 플레이리스트를 기억해둘게요.", createdAt: "2026-07-07T12:01:00+09:00" }
+    ],
+    summary: {
+      content: "사용자는 지난주 재즈 음악을 들었다.",
+      coveredMessageIds: ["u1", "a1"],
+      updatedAt: "2026-07-07T12:30:00+09:00"
+    }
+  };
+
+  await fs.writeFile(
+    path.join(root, ".ai-workspace", "sessions", "session-music.json"),
+    JSON.stringify(session, null, 2),
+    "utf8"
+  );
+  await indexSession(root, session);
+
+  const result = await executeConversationSearch(root, {
+    query: "저번주에 내가 들었던 음악 뭐였지?",
+    maxResults: 5
+  });
+
+  assert.equal(result.results.length > 0, true);
+  assert.equal(result.results[0].sessionId, "session-music");
+  assert.ok(result.results.some((item) => /재즈|음악/.test(item.summary || item.snippet || "")));
+});
+
+test("Conversation Tools: last_week is previous calendar week and last_7_days is rolling", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-conversation-time-"));
+  await fs.mkdir(path.join(root, ".ai-workspace", "sessions"), { recursive: true });
+
+  const sessions = [
+    {
+      id: "previous-calendar-week",
+      title: "Previous week",
+      createdAt: "2026-07-07T10:00:00+09:00",
+      updatedAt: "2026-07-07T10:00:00+09:00",
+      messages: [
+        { id: "p1", role: "user", content: "calendar-week-only keyword", createdAt: "2026-07-07T10:00:00+09:00" }
+      ]
+    },
+    {
+      id: "rolling-week",
+      title: "Rolling week",
+      createdAt: "2026-07-10T10:00:00+09:00",
+      updatedAt: "2026-07-10T10:00:00+09:00",
+      messages: [
+        { id: "r1", role: "user", content: "rolling keyword", createdAt: "2026-07-10T10:00:00+09:00" }
+      ]
+    },
+    {
+      id: "this-week",
+      title: "This week",
+      createdAt: "2026-07-14T10:00:00+09:00",
+      updatedAt: "2026-07-14T10:00:00+09:00",
+      messages: [
+        { id: "t1", role: "user", content: "this week keyword", createdAt: "2026-07-14T10:00:00+09:00" }
+      ]
+    }
+  ];
+
+  for (const session of sessions) {
+    await fs.writeFile(
+      path.join(root, ".ai-workspace", "sessions", `${session.id}.json`),
+      JSON.stringify(session, null, 2),
+      "utf8"
+    );
+    await indexSession(root, session);
+  }
+
+  const now = "2026-07-15T12:00:00+09:00";
+  const lastWeek = await searchConversationIndex(root, "keyword", {
+    timeRange: "last_week",
+    now,
+    maxResults: 10
+  });
+  assert.deepEqual(
+    lastWeek.map((item) => item.sessionId).sort(),
+    ["previous-calendar-week", "rolling-week"]
+  );
+
+  const last7Days = await searchConversationIndex(root, "keyword", {
+    timeRange: "last_7_days",
+    now,
+    maxResults: 10
+  });
+  assert.deepEqual(
+    last7Days.map((item) => item.sessionId).sort(),
+    ["rolling-week", "this-week"]
+  );
+});
+
+test("Conversation Tools: read surrounding messages preserves message ids and removes overlap duplicates", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-conversation-read-"));
+  await fs.mkdir(path.join(root, ".ai-workspace", "sessions"), { recursive: true });
+
+  const session = {
+    id: "session-read",
+    title: "Read windows",
+    messages: [
+      { id: "m-a", role: "user", content: "one" },
+      { id: "m-b", role: "assistant", content: "two" },
+      { id: "m-c", role: "user", content: "three" },
+      { id: "m-d", role: "assistant", content: "four" }
+    ]
+  };
+  await fs.writeFile(
+    path.join(root, ".ai-workspace", "sessions", "session-read.json"),
+    JSON.stringify(session, null, 2),
+    "utf8"
+  );
+
+  const read = await readConversationMessages(root, "session-read", ["m-b", "m-c"], {
+    includeSurroundingMessages: true,
+    surroundingWindow: 1
+  });
+
+  assert.deepEqual(read.messages.map((message) => message.id), ["m-a", "m-b", "m-c", "m-d"]);
+  assert.equal(read.messages.filter((message) => message.id === "m-b").length, 1);
+  assert.equal(read.messages.filter((message) => message.isTarget).length, 2);
 });

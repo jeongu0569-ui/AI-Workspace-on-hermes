@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileKind, resolveWorkspacePath } from "../path-utils.mjs";
+import { readFileMetadata } from "../file-index.mjs";
 import { searchWorkspace } from "../search-service.mjs";
 
 const MAX_READ_CHARS = 60000;
@@ -38,6 +39,23 @@ export const WORKSPACE_TOOL_DEFINITIONS = [
   {
     type: "function",
     function: {
+      name: "docsearch_search",
+      description: "Search indexed notes, documents, and PDFs. Uses native workspace search as the fallback when docsearch MCP is not configured.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          query: { type: "string", description: "Text to search for." },
+          scopePath: { type: "string", description: "Optional workspace-relative folder/file path to limit search." },
+          maxResults: { type: "integer", minimum: 1, maximum: 20 }
+        },
+        required: ["query"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "workspace_read_file",
       description: "Read a text/markdown/code file by workspace-relative path.",
       parameters: {
@@ -54,6 +72,37 @@ export const WORKSPACE_TOOL_DEFINITIONS = [
             maximum: 100000,
             description: "Maximum characters to return."
           }
+        },
+        required: ["path"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_note_file",
+      description: "Read a note, markdown, document text, or small workspace file by workspace-relative path.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          path: { type: "string", description: "Workspace-relative file path." },
+          maxChars: { type: "integer", minimum: 1000, maximum: 100000 }
+        },
+        required: ["path"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_file_metadata",
+      description: "Read server-side metadata for a workspace file, including kind, size, hash, and PDF metadata when available.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          path: { type: "string", description: "Workspace-relative file path." }
         },
         required: ["path"]
       }
@@ -87,25 +136,171 @@ export const WORKSPACE_TOOL_DEFINITIONS = [
         }
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_project",
+      description: "Search source files in a Code project using the native CodeAgentRuntime project search flow.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          query: { type: "string", description: "Search query or instruction." },
+          scopePath: { type: "string", description: "Code workspace path. Defaults to Code." },
+          maxResults: { type: "integer", minimum: 1, maximum: 20 }
+        },
+        required: ["query"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_project_file",
+      description: "Read a source file under the Code workspace root.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          path: { type: "string", description: "Code workspace-relative file path." },
+          maxChars: { type: "integer", minimum: 1000, maximum: 100000 }
+        },
+        required: ["path"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "inspect_git",
+      description: "Inspect git status and diff summary for a Code project.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          scopePath: { type: "string", description: "Code workspace path. Defaults to Code." }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_git_diff",
+      description: "Read current git diff for a Code project or a stored task diff reference.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          scopePath: { type: "string", description: "Code workspace path. Defaults to Code." },
+          taskId: { type: "string", description: "Optional code task id whose stored diffRef should be read." }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "propose_patch",
+      description: "Create a CodeAgentRuntime patch proposal for an existing code task. The proposal creates an approval item instead of directly mutating files.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          taskId: { type: "string" },
+          summary: { type: "string" },
+          changes: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: true
+            }
+          }
+        },
+        required: ["taskId", "changes"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "apply_patch",
+      description: "Apply an approved CodeAgentRuntime patch proposal.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          taskId: { type: "string" },
+          proposalId: { type: "string" },
+          runChecksAfterApply: { type: "boolean" }
+        },
+        required: ["taskId", "proposalId"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_checks",
+      description: "Run approved checks for an existing code task.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          taskId: { type: "string" },
+          commands: { type: "array", items: { type: "string" } }
+        },
+        required: ["taskId"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_git_command",
+      description: "Run an approved git command for an existing code task.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          taskId: { type: "string" },
+          command: { type: "string" },
+          gitPushApproved: { type: "boolean" },
+          dangerApproved: { type: "boolean" }
+        },
+        required: ["taskId", "command"]
+      }
+    }
   }
 ];
 
-export async function executeWorkspaceTool(workspaceRoot, toolName, rawArgs = {}) {
+export async function executeWorkspaceTool(workspaceRoot, toolName, rawArgs = {}, options = {}) {
   const args = typeof rawArgs === "string" ? parseToolArgs(rawArgs) : rawArgs;
-  if (toolName === "workspace_search") {
+  if (toolName === "workspace_search" || toolName === "docsearch_search") {
     return await searchWorkspace(workspaceRoot, {
       query: args.query,
       scopePath: args.scopePath || "",
       maxResults: clampNumber(args.maxResults, 1, 20, 8)
     });
   }
-  if (toolName === "workspace_read_file") {
+  if (toolName === "workspace_read_file" || toolName === "read_note_file") {
     return await readWorkspaceFile(workspaceRoot, args);
+  }
+  if (toolName === "read_file_metadata") {
+    return await readFileMetadata(workspaceRoot, args.path || "");
   }
   if (toolName === "workspace_list_tree") {
     return await listWorkspaceTree(workspaceRoot, args);
   }
+  if (isCodeSurfaceTool(toolName)) {
+    return await executeCodeSurfaceTool(workspaceRoot, toolName, args, options);
+  }
   throw Object.assign(new Error(`Unknown workspace tool: ${toolName}`), { status: 400 });
+}
+
+export function workspaceToolNames() {
+  return WORKSPACE_TOOL_DEFINITIONS.map((tool) => tool.function.name);
 }
 
 async function readWorkspaceFile(workspaceRoot, args) {
@@ -201,4 +396,72 @@ function truncateMiddle(value, maxChars) {
   const head = Math.ceil(maxChars * 0.7);
   const tail = Math.max(0, maxChars - head);
   return `${text.slice(0, head)}\n\n... [truncated] ...\n\n${text.slice(text.length - tail)}`;
+}
+
+function isCodeSurfaceTool(name) {
+  return [
+    "search_project",
+    "read_project_file",
+    "inspect_git",
+    "get_git_diff",
+    "propose_patch",
+    "apply_patch",
+    "run_checks",
+    "run_git_command"
+  ].includes(name);
+}
+
+async function executeCodeSurfaceTool(workspaceRoot, toolName, args, options = {}) {
+  const codeRuntime = options.codeRuntime;
+  if (!codeRuntime) {
+    throw Object.assign(new Error(`Code surface tool '${toolName}' requires CodeAgentRuntime.`), { status: 501 });
+  }
+  if (toolName === "search_project") {
+    const scope = codeRuntime.resolveCodeScope(args.scopePath || "Code");
+    return await codeRuntime.searchProject(scope, args.query || args.instruction || "", {
+      maxSearchResults: args.maxResults
+    });
+  }
+  if (toolName === "read_project_file") {
+    const file = await readWorkspaceFile(workspaceRoot, {
+      path: args.path,
+      maxChars: args.maxChars
+    });
+    if (file.path !== "Code" && !file.path.startsWith("Code/")) {
+      throw Object.assign(new Error("read_project_file can only read files under Code/."), { status: 400 });
+    }
+    return file;
+  }
+  if (toolName === "inspect_git") {
+    const scope = codeRuntime.resolveCodeScope(args.scopePath || "Code");
+    const git = await codeRuntime.inspectGit(scope.absolutePath);
+    const { diff, ...summary } = git;
+    return summary;
+  }
+  if (toolName === "get_git_diff") {
+    if (args.taskId && codeRuntime.state) {
+      const task = await codeRuntime.state.readTask(args.taskId);
+      const diffRef = task?.git?.diffRef || task?.patchProposals?.at?.(-1)?.diffRef || "";
+      if (diffRef) {
+        const diff = await readWorkspaceFile(workspaceRoot, { path: diffRef, maxChars: args.maxChars || 60000 });
+        return { taskId: args.taskId, diffRef, diff: diff.content, truncated: diff.truncated };
+      }
+    }
+    const scope = codeRuntime.resolveCodeScope(args.scopePath || "Code");
+    const git = await codeRuntime.inspectGit(scope.absolutePath);
+    return { scopePath: scope.relativePath, isRepository: git.isRepository, diff: truncateMiddle(git.diff || "", args.maxChars || 60000) };
+  }
+  if (toolName === "propose_patch") {
+    return await codeRuntime.proposePatch(args.taskId, args);
+  }
+  if (toolName === "apply_patch") {
+    return await codeRuntime.applyPatch(args.taskId, { ...args, approved: options.approved === true });
+  }
+  if (toolName === "run_checks") {
+    return await codeRuntime.runChecks(args.taskId, { ...args, approved: options.approved === true });
+  }
+  if (toolName === "run_git_command") {
+    return await codeRuntime.runGitCommand(args.taskId, { ...args, approved: options.approved === true });
+  }
+  throw Object.assign(new Error(`Unknown code surface tool: ${toolName}`), { status: 400 });
 }

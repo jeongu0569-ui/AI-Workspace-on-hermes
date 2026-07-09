@@ -169,7 +169,8 @@ export class WorkspaceAgentEngine extends EventEmitter {
     });
     try {
       const priorSession = params.sessionId ? await this.state.readSession(params.sessionId) : null;
-      const history = Array.isArray(priorSession?.messages) ? priorSession.messages : [];
+      const history = this.sessionRuntime.promptHistory(priorSession);
+      const memoryResults = await this.searchRelevantMemory(params, priorSession);
       if (params.sessionId) {
         await this.sessionRuntime.appendSessionMessage(params.sessionId, {
           role: "user",
@@ -182,7 +183,12 @@ export class WorkspaceAgentEngine extends EventEmitter {
         ...params,
         context,
         history,
+        sessionSummary: priorSession?.summary || null,
+        memoryResults,
         surface: priorSession?.surface || params.surface || null,
+        folderId: priorSession?.folderId || params.folderId || null,
+        projectId: priorSession?.projectId || params.projectId || null,
+        codeRuntime: this.codeRuntime,
         taskId: task.id
       }).catch((error) => {
         if (this.chatRuntime.isAvailable()) throw error;
@@ -553,7 +559,8 @@ export class WorkspaceAgentEngine extends EventEmitter {
     const result = await this.runtime.resumePendingState(pendingState, {
       taskId,
       approvalId: params.approvalId,
-      approval: params.approval
+      approval: params.approval,
+      codeRuntime: this.codeRuntime
     });
     const status = result.ok === false ? "failed" : "completed";
     const updated = await this.state.finishTask(taskId, {
@@ -665,6 +672,19 @@ export class WorkspaceAgentEngine extends EventEmitter {
       ...(params.context || {}),
       workspaceContext: await buildWorkspaceContext(this.config.workspaceRoot, params.contextRequest)
     };
+  }
+
+  async searchRelevantMemory(params, session) {
+    try {
+      const { searchMemory } = await import("./runtime/memory-retrieval.mjs");
+      return await searchMemory(this.config.workspaceRoot, params.prompt || params.message || "", {
+        currentFolderId: session?.folderId || params.folderId || "",
+        currentProjectId: session?.projectId || params.projectId || "",
+        maxResults: 6
+      });
+    } catch {
+      return [];
+    }
   }
 
   trackEventWrite(promise) {
