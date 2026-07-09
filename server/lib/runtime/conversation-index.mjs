@@ -33,6 +33,7 @@ export async function indexSession(workspaceRoot, session) {
     updatedAt: session.updatedAt || new Date().toISOString(),
     lastOpenedAt: session.lastOpenedAt || new Date().toISOString(),
     archivedAt: session.archivedAt || null,
+    archiveReason: session.archiveReason || null,
     visibleInSidebar: session.visibleInSidebar !== false,
     searchable: session.searchable !== false,
     pinned: Boolean(session.pinned)
@@ -126,6 +127,7 @@ export async function searchConversationIndex(workspaceRoot, query, options = {}
     const sessionObj = sessionsMap.get(s.sessionId);
     if (!sessionObj) continue;
     if (sessionObj.searchable === false) continue;
+    if (sessionObj.archivedAt && options.includeArchived !== true) continue;
     
     // Apply filters
     const sessionTime = parseTime(s.updatedAt || sessionObj.updatedAt || sessionObj.createdAt);
@@ -143,6 +145,9 @@ export async function searchConversationIndex(workspaceRoot, query, options = {}
         folderId: sessionObj.folderId,
         projectId: sessionObj.projectId,
         createdAt: sessionObj.createdAt,
+        archived: Boolean(sessionObj.archivedAt),
+        archivedAt: sessionObj.archivedAt || null,
+        archiveReason: sessionObj.archiveReason || null,
         score,
         summary: s.summary
       });
@@ -154,6 +159,7 @@ export async function searchConversationIndex(workspaceRoot, query, options = {}
     const sessionObj = sessionsMap.get(m.sessionId);
     if (!sessionObj) continue;
     if (sessionObj.searchable === false) continue;
+    if (sessionObj.archivedAt && options.includeArchived !== true) continue;
 
     // Apply filters
     const sessionTime = parseTime(m.createdAt || sessionObj.updatedAt || sessionObj.createdAt);
@@ -171,6 +177,9 @@ export async function searchConversationIndex(workspaceRoot, query, options = {}
         folderId: sessionObj.folderId,
         projectId: sessionObj.projectId,
         createdAt: sessionObj.createdAt,
+        archived: Boolean(sessionObj.archivedAt),
+        archivedAt: sessionObj.archivedAt || null,
+        archiveReason: sessionObj.archiveReason || null,
         score,
         snippet: m.content,
         sourceMessageIds: [m.messageId]

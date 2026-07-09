@@ -4,7 +4,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readMemoryById, searchMemory, updateMemoryFromSession } from "./memory-retrieval.mjs";
+import {
+  approveMemoryCandidate,
+  listMemoryCandidates,
+  readMemoryById,
+  recordDeletedMemoryTombstone,
+  searchMemory,
+  updateMemoryFromSession
+} from "./memory-retrieval.mjs";
 
 test("Memory Retrieval: search across memory pools", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-memory-retrieval-"));
@@ -41,7 +48,7 @@ test("Memory Retrieval: search across memory pools", async () => {
   assert.equal(search2[0].folderId, "computer");
 });
 
-test("Memory Retrieval: update pipeline saves user, project, folder, and session memories with sources", async () => {
+test("Memory Retrieval: update pipeline saves scoped memories and reviews user memory by default", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-memory-update-"));
   const session = {
     id: "session-memory",
@@ -60,15 +67,18 @@ test("Memory Retrieval: update pipeline saves user, project, folder, and session
   };
 
   const result = await updateMemoryFromSession(root, session);
-  assert.equal(result.saved.length, 4);
+  assert.equal(result.saved.length, 3);
+  assert.equal(result.candidates.length, 1);
   assert.ok(result.saved.every((memory) => memory.sourceSessionIds.includes("session-memory")));
   assert.ok(result.saved.every((memory) => memory.sourceMessageIds.includes("u1")));
 
-  const userMemory = result.saved.find((memory) => memory.type === "user_memory");
-  assert.ok(userMemory);
-  const loaded = await readMemoryById(root, userMemory.id);
-  assert.equal(loaded.id, userMemory.id);
-  assert.match(loaded.content, /다크 모드/);
+  const pending = await listMemoryCandidates(root);
+  const userCandidate = pending.find((memory) => memory.type === "user_memory");
+  assert.ok(userCandidate);
+  assert.match(userCandidate.content, /다크 모드/);
+  const approved = await approveMemoryCandidate(root, userCandidate.id);
+  const loaded = await readMemoryById(root, approved.memory.id);
+  assert.equal(loaded.id, approved.memory.id);
 
   const projectSearch = await searchMemory(root, "docsearch", {
     currentProjectId: "project-alpha",
@@ -81,4 +91,45 @@ test("Memory Retrieval: update pipeline saves user, project, folder, and session
     maxResults: 10
   });
   assert.equal(folderSearch.some((memory) => memory.type === "folder_memory"), true);
+});
+
+test("Memory Retrieval: duplicate content merges sources and deleted memories are not regenerated", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-memory-merge-delete-"));
+  const first = {
+    id: "s1",
+    createdAt: "2026-07-08T10:00:00+09:00",
+    summary: {
+      content: "선호: 사용자는 compact UI를 선호한다",
+      updatedAt: "2026-07-08T10:01:00+09:00"
+    },
+    messages: [{ id: "u1", role: "user", content: "compact UI를 선호한다" }]
+  };
+  const second = {
+    ...first,
+    id: "s2",
+    messages: [{ id: "u2", role: "user", content: "compact UI를 선호한다" }]
+  };
+
+  await updateMemoryFromSession(root, first, {
+    memorySettings: { autoSaveUserMemory: true, memoryReviewRequired: false }
+  });
+  await updateMemoryFromSession(root, second, {
+    memorySettings: { autoSaveUserMemory: true, memoryReviewRequired: false }
+  });
+
+  const results = await searchMemory(root, "compact UI", { maxResults: 10 });
+  const userMemory = results.find((item) => item.type === "user_memory");
+  assert.ok(userMemory);
+  assert.deepEqual(userMemory.sourceSessionIds.sort(), ["s1", "s2"]);
+
+  await recordDeletedMemoryTombstone(root, userMemory, "user_deleted");
+  const third = await updateMemoryFromSession(root, {
+    ...first,
+    id: "s3",
+    messages: [{ id: "u3", role: "user", content: "compact UI를 선호한다" }]
+  }, {
+    memorySettings: { autoSaveUserMemory: true, memoryReviewRequired: false }
+  });
+  assert.equal(third.saved.some((item) => item.type === "user_memory"), false);
+  assert.equal(third.blocked.some((item) => item.reason === "matches_deleted_memory_tombstone"), true);
 });

@@ -218,6 +218,8 @@ export function buildSessionSummary(session = {}) {
     preferences,
     sourceMessageIds: coveredMessageIds,
     coveredMessageIds,
+    lastSummarizedMessageId: coveredMessageIds.at(-1) || null,
+    recentMessageIds: coveredMessageIds.slice(-12),
     updatedAt: new Date().toISOString()
   };
 }

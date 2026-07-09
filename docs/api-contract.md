@@ -184,6 +184,7 @@ the server instead of reconstructing tool calls.
 | GET | `/api/tools/available` | implemented | token when configured | Apple settings/runtime |
 | POST | `/api/tools/discover` | implemented | token when configured | runtime |
 | POST | `/api/conversations/search` | implemented | token when configured | runtime/search |
+| GET | `/api/conversations/search?query=...` | implemented | token when configured | runtime/search |
 | POST | `/api/conversations/read` | implemented | token when configured | runtime/search |
 | GET | `/api/conversation-folders` | implemented | token when configured | Apple sessions |
 | POST | `/api/conversation-folders` | implemented | token when configured | Apple sessions |
@@ -195,6 +196,11 @@ the server instead of reconstructing tool calls.
 | POST | `/api/sessions/archive-expired` | implemented | token when configured | maintenance |
 | POST | `/api/sessions/:id/summarize` | implemented | token when configured | runtime |
 | GET | `/api/memory/search` | implemented | token when configured | runtime/search |
+| GET | `/api/memory/settings` | implemented | token when configured | settings/runtime |
+| POST | `/api/memory/settings` | implemented | token when configured | settings/runtime |
+| GET | `/api/memory/candidates` | implemented | token when configured | settings/runtime |
+| POST | `/api/memory/candidates/:id/approve` | implemented | token when configured | settings/runtime |
+| POST | `/api/memory/candidates/:id/reject` | implemented | token when configured | settings/runtime |
 | POST | `/api/memory` | implemented | token when configured | settings/runtime |
 | GET | `/api/memory/:id` | implemented | token when configured | settings/runtime |
 | PATCH | `/api/memory/:id` | implemented | token when configured | settings/runtime |
@@ -213,6 +219,17 @@ code  -> CodeAgentRuntime search/read/git/patch/check tools plus conversation/me
 does not auto-enable approval-gated tools such as `apply_patch`,
 `run_checks`, or `run_git_command`.
 
+Core recall tools are always present in surface modes:
+`tool_discovery`, `conversation_search`, `conversation_read`, and
+`memory_search`. Surface-level custom modes cannot remove these. The global
+runtime `disabledTools` config can still block them when an administrator needs
+to disable recall or discovery globally.
+
+Temporary tool expansion is turn-only. It is not stored in session JSON, user
+tool-mode overrides, or global runtime config. Runtime events include
+`tool.discovery.request`, `tool.discovery.result`,
+`tool.expansion.applied`, and `tool.expansion.blocked`.
+
 Conversation search supports fuzzy keyword recall and time ranges:
 `today`, `yesterday`, `this_week`, `last_week`, `last_7_days`, and ISO date
 ranges. `last_week` means the previous calendar Monday-Sunday in the server's
@@ -222,6 +239,27 @@ General unscoped `[Chat]` sessions are count-managed rather than date-managed:
 the server keeps the latest 30 visible general chats and archives older
 overflow. Sessions attached to a project, folder, pin, active code task, or
 pending approval are exempt.
+
+Conversation search hides archived sessions by default. Pass
+`includeArchived=true` to search archived general-chat overflow or manually
+archived sessions. Search results include `archived`, `archivedAt`, and
+`archiveReason`.
+
+Memory extraction defaults:
+
+```json
+{
+  "autoSaveProjectMemory": true,
+  "autoSaveFolderMemory": true,
+  "autoSaveSessionSummaryMemory": true,
+  "autoSaveUserMemory": false,
+  "memoryReviewRequired": true
+}
+```
+
+Project/folder/session-summary memories can be saved automatically. User-global
+memories and sensitive-looking memories go through the candidate inbox unless a
+local setting explicitly allows automatic user memory saves.
 
 ## Code Tasks
 

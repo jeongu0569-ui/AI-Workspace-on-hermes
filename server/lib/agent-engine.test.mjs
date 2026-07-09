@@ -340,6 +340,35 @@ test("workspace agent engine cancels approval_required tasks", async () => {
   assert.equal(task.error, "User cancelled.");
 });
 
+test("code surface prompt auto-creates and links a current code task", async () => {
+  const root = await fixtureWorkspace();
+  await fs.mkdir(path.join(root, "Code", "demo"), { recursive: true });
+  const runtime = new FakeAgentRuntime();
+  const engine = new WorkspaceAgentEngine({ workspaceRoot: root }, runtime);
+
+  const session = await engine.createSession({
+    surface: "code",
+    provider: "custom",
+    model: "demo-model"
+  });
+  const result = await engine.submitPrompt({
+    sessionId: session.sessionId,
+    message: "이 코드 프로젝트 봐줘",
+    surface: "code",
+    scopePath: "Code/demo"
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(runtime.lastPrompt.currentCodeTaskId, /^task-/);
+  assert.equal(runtime.lastPrompt.currentCodeScopePath, "Code/demo");
+  const codeTask = await engine.readTask(runtime.lastPrompt.currentCodeTaskId);
+  assert.equal(codeTask.type, "code");
+  assert.equal(codeTask.scopePath, "Code/demo");
+
+  const storedSession = await engine.state.readSession(session.sessionId);
+  assert.equal(storedSession.activeCodeTaskId, runtime.lastPrompt.currentCodeTaskId);
+});
+
 class FakeAgentRuntime extends EventEmitter {
   constructor() {
     super();

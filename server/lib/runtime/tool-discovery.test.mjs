@@ -37,3 +37,18 @@ test("Tool Discovery: does not auto-enable approval-gated tools", async () => {
   assert.equal(res.expandedToolsForThisTurn.includes("run_git_command"), false);
   assert.equal(res.recommendation.enableForThisTurn.includes("apply_patch"), false);
 });
+
+test("Tool Discovery: disabled tools are discoverable but blocked from turn expansion", async () => {
+  const res = await executeToolDiscovery("/tmp", "chat", {
+    reason: "need indexed notes",
+    desiredCapability: "search indexed pdf notes documents"
+  }, {
+    disabledTools: ["docsearch_search"]
+  });
+
+  assert.ok(res.availableToolGroups.some((group) =>
+    group.tools.some((tool) => tool.name === "docsearch_search" && tool.disabledByUser === true)
+  ));
+  assert.equal(res.expandedToolsForThisTurn.includes("docsearch_search"), false);
+  assert.equal(res.blockedTools.some((tool) => tool.name === "docsearch_search" && tool.reason === "disabled_by_surface_mode"), true);
+});

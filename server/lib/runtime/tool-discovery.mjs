@@ -99,8 +99,9 @@ export const TOOL_REGISTRY = [
   }
 ];
 
-export async function executeToolDiscovery(workspaceRoot, surface, args = {}) {
+export async function executeToolDiscovery(workspaceRoot, surface, args = {}, options = {}) {
   const desiredCapability = String(args.desiredCapability || "").toLowerCase();
+  const disabledTools = new Set((options.disabledTools || []).map(String));
   const queryWords = desiredCapability
     .split(/[^a-zA-Z0-9가-힣_/-]+/)
     .map((word) => word.trim())
@@ -131,7 +132,9 @@ export async function executeToolDiscovery(workspaceRoot, surface, args = {}) {
     const g = groupsMap.get(tool.group);
     g.tools.push({
       name: tool.name,
-      description: tool.description
+      description: tool.description,
+      disabledByUser: disabledTools.has(tool.name),
+      requiresApproval: Boolean(tool.requiresApproval)
     });
     if (tool.requiresApproval) {
       g.requiresApproval = true;
@@ -139,14 +142,24 @@ export async function executeToolDiscovery(workspaceRoot, surface, args = {}) {
   }
 
   const availableToolGroups = Array.from(groupsMap.values());
+  const blockedTools = matchedTools
+    .filter((tool) => disabledTools.has(tool.name) || tool.requiresApproval)
+    .map((tool) => ({
+      name: tool.name,
+      reason: disabledTools.has(tool.name)
+        ? "disabled_by_surface_mode"
+        : "requires_approval_or_dangerous"
+    }));
+
   const recommendTools = matchedTools
-    .filter(t => !t.requiresApproval) // Recommend safe tools first
+    .filter(t => !t.requiresApproval && !disabledTools.has(t.name)) // Recommend safe enabled tools first
     .map(t => t.name)
     .slice(0, 3);
 
   return {
     taskId: args.taskId || null,
     expandedToolsForThisTurn: recommendTools,
+    blockedTools,
     reason: `Found tools matching your request for '${desiredCapability}'`,
     availableToolGroups,
     recommendation: {

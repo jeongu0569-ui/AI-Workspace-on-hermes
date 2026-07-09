@@ -142,6 +142,9 @@ Current implemented files:
 .ai-workspace/memory/projects/project-<id>.jsonl
 .ai-workspace/memory/folders/folder-<id>.json
 .ai-workspace/memory/sessions/session-summaries.jsonl
+.ai-workspace/memory/settings.json
+.ai-workspace/memory/candidates.jsonl
+.ai-workspace/memory/deleted-memory-hashes.jsonl
 .ai-workspace/audit/audit.jsonl
 ```
 
@@ -323,6 +326,7 @@ Memory rows use this common shape:
   "id": "memory-...",
   "type": "user_memory",
   "content": "사용자는 다크 모드 UI를 좋아한다.",
+  "contentHash": "hash-of-normalized-content",
   "projectId": "project-alpha",
   "folderId": "folder-notes",
   "sourceSessionIds": ["session-..."],
@@ -333,6 +337,42 @@ Memory rows use this common shape:
   "pinned": false
 }
 ```
+
+Memory rows are upserted by `id`, then `contentHash`, then very close normalized
+content. When duplicates are merged, source session/message ids and tags are
+accumulated and `updatedAt` is refreshed.
+
+Default memory settings are:
+
+```json
+{
+  "autoSaveProjectMemory": true,
+  "autoSaveFolderMemory": true,
+  "autoSaveSessionSummaryMemory": true,
+  "autoSaveUserMemory": false,
+  "memoryReviewRequired": true
+}
+```
+
+Project, folder, and session-summary memory can be saved automatically.
+User-global memory is a candidate by default so the user can approve, reject,
+or edit it before it becomes durable memory. Sensitive-looking memory also goes
+to review.
+
+Deleted memories write tombstones:
+
+```json
+{
+  "id": "deleted-memory-...",
+  "memoryId": "memory-...",
+  "contentHash": "hash-of-normalized-content",
+  "reason": "user_deleted",
+  "deletedAt": "2026-07-09T02:00:00Z"
+}
+```
+
+The extraction pipeline checks tombstones so a deleted/edited memory is not
+immediately regenerated from the same session summary.
 
 Memory extraction currently uses deterministic heuristics from session summary
 and recent user/assistant messages. The store is intentionally simple so a

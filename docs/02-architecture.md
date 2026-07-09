@@ -153,12 +153,31 @@ The native runtime exposes surface-filtered tools:
 - Notes surface: `workspace_search`, `docsearch_search`, `read_note_file`, `read_file_metadata`.
 - Code surface: `search_project`, `read_project_file`, `inspect_git`, `get_git_diff`, `propose_patch`, `apply_patch`, `run_checks`, `run_git_command`.
 
+The core recall set (`tool_discovery`, `conversation_search`,
+`conversation_read`, `memory_search`) is mandatory for all surfaces. Surface
+custom modes cannot remove these tools. The global/admin runtime
+`disabledTools` list remains the one place that can block them.
+
 Code-surface tools route through `CodeAgentRuntime`. Mutating or command-running
 tools are approval-gated by the tool mode and approval inbox.
+
+When a code-surface chat begins without an explicit `codeTaskId`, the agent
+engine creates a lightweight current code task, stores it on the session, and
+passes it to tool execution. Code tools can then use the current task id when
+the model omits `taskId`.
 
 `tool_discovery` can expand safe tools for the current turn only. This lets a
 plain chat discover note search when the user asks a broad workspace question
 without permanently enabling every tool in every chat.
+
+Discovery emits `tool.discovery.request`, `tool.discovery.result`,
+`tool.expansion.applied`, and `tool.expansion.blocked`. Expansion is never
+persisted to session JSON or user tool-mode settings. Approval-gated or
+dangerous tools can be discovered but are not automatically expanded.
+
+`docsearch_search` first tries a configured docsearch-style MCP server with a
+search/query tool. When no suitable MCP server is configured or the call fails,
+the runtime returns a normalized `workspace-search-fallback` result instead.
 
 Tool calls are executed by AI Workspace itself, emitted as `tool.start`, `tool.complete`, or `tool.error` live events, then passed back to the model as tool results before the final assistant message is streamed.
 

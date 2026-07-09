@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   BUILTIN_PROVIDERS,
   listRuntimeModels,
@@ -30,6 +30,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     this.fetch = fetchImpl;
     this.sessions = new Map();
     this.mcpClients = new Map();
+    this.mcpToolNameMap = new Map();
   }
 
   async connect() {
@@ -156,7 +157,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     let toolRounds = 0;
     let activeParams = {
       ...params,
-      expandedToolsForThisTurn: [...(params.expandedToolsForThisTurn || [])]
+      expandedToolsForThisTurn: []
     };
     const maxToolRounds = clampNumber(params.maxToolRounds, 0, 6, 3);
 
@@ -184,7 +185,30 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       for (const call of result.toolCalls) {
         const toolResult = await this.executeToolCall(call, activeParams);
         if (call.name === "tool_discovery") {
-          activeParams = expandToolsForTurn(activeParams, toolResult);
+          const expansion = expandToolsForTurn(activeParams, toolResult);
+          activeParams = expansion.params;
+          if (expansion.applied.length) {
+            this.emit("event", {
+              type: "tool.expansion.applied",
+              sessionId: params.sessionId,
+              taskId: params.taskId,
+              surface: params.surface || "chat",
+              expandedTools: expansion.applied,
+              reason: toolResult.reason || toolResult.recommendation?.reason || "",
+              createdAt: new Date().toISOString()
+            });
+          }
+          if (expansion.blocked.length) {
+            this.emit("event", {
+              type: "tool.expansion.blocked",
+              sessionId: params.sessionId,
+              taskId: params.taskId,
+              surface: params.surface || "chat",
+              blockedTools: expansion.blocked,
+              reason: "Tool discovery suggested tools that are disabled by surface mode or require approval.",
+              createdAt: new Date().toISOString()
+            });
+          }
         }
         messages.push({
           role: "tool",
@@ -210,7 +234,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
 
     // Read toggles & MCP servers to merge active tools
     const config = await readRuntimeConfig(this.workspaceRoot);
-    const { getEffectiveToolMode } = await import("./tool-mode-registry.mjs");
+    const { CORE_RECALL_TOOLS, getEffectiveToolMode } = await import("./tool-mode-registry.mjs");
     const { TOOL_DISCOVERY_DEFINITION } = await import("./tool-discovery.mjs");
     const { CONVERSATION_SEARCH_DEFINITION, CONVERSATION_READ_DEFINITION } = await import("./conversation-tools.mjs");
     const { MEMORY_SEARCH_DEFINITION } = await import("./memory-retrieval.mjs");
@@ -218,6 +242,9 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     const effectiveMode = await getEffectiveToolMode(this.workspaceRoot, params.surface || "chat");
     const enabledTools = new Set(effectiveMode.enabledTools || []);
     const expandedTools = new Set(params.expandedToolsForThisTurn || []);
+    const modeDisabledTools = new Set(effectiveMode.disabledTools || []);
+    const globallyDisabledTools = new Set(config.disabledTools || []);
+    const coreRecallTools = new Set(CORE_RECALL_TOOLS);
 
     const activeTools = [...WORKSPACE_TOOL_DEFINITIONS];
     
@@ -237,6 +264,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       }
     }
 
+    this.mcpToolNameMap.clear();
     if (config.mcpServers) {
       const enabledMcpNames = new Set(
         config.mcpServers
@@ -258,13 +286,18 @@ export class OpenAICompatibleRuntime extends EventEmitter {
             const client = await this.getOrStartMcpClient(mcp);
             const mcpTools = await client.listTools();
             for (const tool of mcpTools) {
+              const publicName = this.publicMcpToolName(mcp.name, tool.name);
               activeTools.push({
                 type: "function",
                 function: {
-                  name: `mcp_${mcp.name}_${tool.name}`,
+                  name: publicName,
                   description: tool.description || "",
                   parameters: tool.inputSchema || { type: "object", properties: {} }
                 }
+              });
+              this.mcpToolNameMap.set(publicName, {
+                serverName: mcp.name,
+                originalToolName: tool.name
               });
             }
           } catch (err) {
@@ -283,12 +316,11 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     // Filter tools based on tool mode enabledTools list
     const filteredTools = activeTools.filter((t) => {
       const name = t.function.name;
-      if (name === "tool_discovery" || name === "conversation_search" || name === "conversation_read") {
-        return true;
-      }
-      if (config.disabledTools && config.disabledTools.includes(name)) {
+      if (globallyDisabledTools.has(name)) {
         return false;
       }
+      if (coreRecallTools.has(name)) return true;
+      if (modeDisabledTools.has(name)) return false;
       if (params.surface) {
         return enabledTools.has(name) || expandedTools.has(name);
       }
@@ -351,11 +383,11 @@ export class OpenAICompatibleRuntime extends EventEmitter {
 
   async executeToolCall(call, params) {
     const config = await readRuntimeConfig(this.workspaceRoot);
-    const { getEffectiveToolMode } = await import("./tool-mode-registry.mjs");
+    const { CORE_RECALL_TOOLS, getEffectiveToolMode } = await import("./tool-mode-registry.mjs");
     const effectiveMode = await getEffectiveToolMode(this.workspaceRoot, params.surface || "chat");
     const enabledTools = new Set(effectiveMode.enabledTools || []);
     const expandedTools = new Set(params.expandedToolsForThisTurn || []);
-    const mandatory = new Set(["tool_discovery", "conversation_search", "conversation_read"]);
+    const mandatory = new Set(CORE_RECALL_TOOLS);
 
     // Check if tool is disabled in config first
     const disabledTools = new Set(config.disabledTools || []);
@@ -390,7 +422,7 @@ export class OpenAICompatibleRuntime extends EventEmitter {
 
     // Requires approval check for workspace tools (only when surface is specified)
     const requiresApprovalList = new Set(effectiveMode.requiresApproval || []);
-    if (params.surface && requiresApprovalList.has(call.name) && params.approved !== true && !call.name.startsWith("mcp_")) {
+    if (params.surface && requiresApprovalList.has(call.name) && params.approved !== true && !isMcpPublicToolName(call.name)) {
       const pendingState = {
         type: "workspace.tool.call",
         sessionId: params.sessionId,
@@ -399,6 +431,8 @@ export class OpenAICompatibleRuntime extends EventEmitter {
         folderId: params.folderId || null,
         projectId: params.projectId || null,
         expandedToolsForThisTurn: params.expandedToolsForThisTurn || [],
+        currentCodeTaskId: params.currentCodeTaskId || null,
+        currentCodeScopePath: params.currentCodeScopePath || null,
         toolCall: call,
         toolName: call.name,
         arguments: call.arguments,
@@ -427,10 +461,14 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     }
 
     // Check if it is MCP tool execution
-    if (call.name.startsWith("mcp_")) {
-      const parts = call.name.split("_");
-      const mcpName = parts[1];
-      const originalToolName = parts.slice(2).join("_");
+    if (isMcpPublicToolName(call.name)) {
+      const resolvedMcpTool = this.resolveMcpToolName(call.name);
+      if (!resolvedMcpTool) {
+        const errorMsg = `MCP public tool '${call.name}' is not registered in the current runtime tool map.`;
+        return { ok: false, error: errorMsg };
+      }
+      const mcpName = resolvedMcpTool.serverName;
+      const originalToolName = resolvedMcpTool.originalToolName;
 
       const mcp = config.mcpServers?.find((s) => s.name === mcpName);
       if (!mcp) {
@@ -493,6 +531,12 @@ export class OpenAICompatibleRuntime extends EventEmitter {
             type: "mcp.tool.call",
             sessionId: params.sessionId,
             taskId: params.taskId,
+            surface: params.surface || null,
+            folderId: params.folderId || null,
+            projectId: params.projectId || null,
+            expandedToolsForThisTurn: params.expandedToolsForThisTurn || [],
+            currentCodeTaskId: params.currentCodeTaskId || null,
+            currentCodeScopePath: params.currentCodeScopePath || null,
             toolCall: call,
             serverName: mcpName,
             toolName: originalToolName,
@@ -573,9 +617,30 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       const args = typeof call.arguments === "string" ? JSON.parse(call.arguments || "{}") : call.arguments;
       if (call.name === "tool_discovery") {
         const { executeToolDiscovery } = await import("./tool-discovery.mjs");
+        this.emit("event", {
+          type: "tool.discovery.request",
+          sessionId: params.sessionId,
+          taskId: params.taskId,
+          surface: params.surface || "chat",
+          reason: args.reason || "",
+          desiredCapability: args.desiredCapability || "",
+          createdAt: new Date().toISOString()
+        });
         result = await executeToolDiscovery(this.workspaceRoot, params.surface || "chat", {
           ...args,
           taskId: params.taskId
+        }, {
+          disabledTools: effectiveMode.disabledTools || []
+        });
+        this.emit("event", {
+          type: "tool.discovery.result",
+          sessionId: params.sessionId,
+          taskId: params.taskId,
+          surface: params.surface || "chat",
+          expandedTools: result.expandedToolsForThisTurn || [],
+          blockedTools: result.blockedTools || [],
+          reason: result.reason || "",
+          createdAt: new Date().toISOString()
         });
       } else if (call.name === "conversation_search") {
         const { executeConversationSearch } = await import("./conversation-tools.mjs");
@@ -593,10 +658,16 @@ export class OpenAICompatibleRuntime extends EventEmitter {
           })
         };
       } else {
-        result = await executeWorkspaceTool(this.workspaceRoot, call.name, call.arguments, {
-          codeRuntime: params.codeRuntime,
-          approved: params.approved === true
-        });
+        if (call.name === "docsearch_search") {
+          result = await this.executeDocsearchSearch(args, params);
+        } else {
+          result = await executeWorkspaceTool(this.workspaceRoot, call.name, call.arguments, {
+            codeRuntime: params.codeRuntime,
+            approved: params.approved === true,
+            currentCodeTaskId: params.currentCodeTaskId,
+            currentCodeScopePath: params.currentCodeScopePath
+          });
+        }
       }
       this.emit("event", {
         type: "tool.complete",
@@ -661,6 +732,8 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       projectId: pendingState.projectId || params.projectId,
       expandedToolsForThisTurn: pendingState.expandedToolsForThisTurn || params.expandedToolsForThisTurn || [],
       codeRuntime: params.codeRuntime,
+      currentCodeTaskId: pendingState.currentCodeTaskId || params.currentCodeTaskId,
+      currentCodeScopePath: pendingState.currentCodeScopePath || params.currentCodeScopePath,
       approved: true
     });
     return {
@@ -692,6 +765,97 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     return client;
   }
 
+  publicMcpToolName(serverName, originalToolName) {
+    const base = `mcp__${safeToolSegment(serverName)}__${safeToolSegment(originalToolName)}`;
+    const existing = this.mcpToolNameMap.get(base);
+    if (!existing || (existing.serverName === serverName && existing.originalToolName === originalToolName)) {
+      return base;
+    }
+    const suffix = createHash("sha256").update(`${serverName}\0${originalToolName}`).digest("hex").slice(0, 8);
+    return `${base}__${suffix}`;
+  }
+
+  resolveMcpToolName(publicToolName) {
+    const mapped = this.mcpToolNameMap.get(publicToolName);
+    if (mapped) return mapped;
+    if (publicToolName.startsWith("mcp__")) {
+      const parts = publicToolName.split("__");
+      if (parts.length >= 3) {
+        return {
+          serverName: parts[1],
+          originalToolName: parts.slice(2).join("__")
+        };
+      }
+      return null;
+    }
+
+    // Backward-compatible legacy fallback: mcp_<server>_<tool>. This is only
+    // reliable when the server name has no underscores.
+    if (publicToolName.startsWith("mcp_")) {
+      const parts = publicToolName.split("_");
+      if (parts.length >= 3) {
+        return {
+          serverName: parts[1],
+          originalToolName: parts.slice(2).join("_")
+        };
+      }
+    }
+    return null;
+  }
+
+  async executeDocsearchSearch(args = {}, params = {}) {
+    const config = await readRuntimeConfig(this.workspaceRoot);
+    const docsearchServers = (config.mcpServers || [])
+      .filter((server) => server.enabled !== false)
+      .filter((server) => /docsearch|doc-search|document|rag|search/i.test(`${server.name} ${server.command || ""} ${(server.args || []).join(" ")}`));
+
+    for (const server of docsearchServers) {
+      try {
+        const client = await this.getOrStartMcpClient(server);
+        const tools = await client.listTools();
+        const searchTool = tools.find((tool) => isDocsearchTool(tool));
+        if (!searchTool) continue;
+        const mcpResult = await client.callTool(searchTool.name, {
+          query: args.query || "",
+          scopePath: args.scopePath || "",
+          maxResults: clampNumber(args.maxResults, 1, 20, 8)
+        });
+        return {
+          ok: true,
+          source: "docsearch-mcp",
+          serverName: server.name,
+          toolName: searchTool.name,
+          results: normalizeDocsearchResults(mcpResult),
+          fallbackUsed: false
+        };
+      } catch (error) {
+        this.emit("event", {
+          type: "mcp.error",
+          sessionId: params.sessionId,
+          taskId: params.taskId,
+          serverName: server.name,
+          error: error?.message || "docsearch MCP call failed."
+        });
+      }
+    }
+
+    const { searchWorkspace } = await import("../search-service.mjs");
+    const fallback = await searchWorkspace(this.workspaceRoot, {
+      query: args.query || "",
+      scopePath: args.scopePath || "",
+      maxResults: clampNumber(args.maxResults, 1, 20, 8)
+    });
+    return {
+      ok: true,
+      source: "workspace-search-fallback",
+      results: normalizeWorkspaceSearchResults(fallback),
+      fallbackUsed: true,
+      warning: docsearchServers.length
+        ? "docsearch MCP did not return usable results; workspace search fallback was used."
+        : "docsearch MCP is not configured."
+    };
+  }
+
   close() {
     for (const client of this.mcpClients.values()) {
       try {
@@ -706,7 +870,8 @@ export class OpenAICompatibleRuntime extends EventEmitter {
     const parts = [
       "You are AI Workspace's built-in assistant.",
       "Answer in the same language as the user's latest message.",
-      "Use provided workspace context when relevant, but do not expose it as raw metadata."
+      "Use provided workspace context when relevant, but do not expose it as raw metadata.",
+      ...recallToolPolicyLines()
     ];
 
     const workspace = context.workspace || {};
@@ -732,6 +897,11 @@ export class OpenAICompatibleRuntime extends EventEmitter {
       if (workspace.ragRecommended) {
         parts.push("Search may be needed for broader folder/workspace questions.");
       }
+    }
+
+    if (params.currentCodeTaskId) {
+      parts.push(`Current code task id: ${params.currentCodeTaskId}`);
+      if (params.currentCodeScopePath) parts.push(`Current code task scope: ${params.currentCodeScopePath}`);
     }
 
     if (Array.isArray(context.inlineBlocks) && context.inlineBlocks.length) {
@@ -898,7 +1068,8 @@ function buildSystemMessage(params) {
   const parts = [
     "You are AI Workspace's built-in assistant.",
     "Answer in the same language as the user's latest message.",
-    "Use provided workspace context when relevant, but do not expose it as raw metadata."
+    "Use provided workspace context when relevant, but do not expose it as raw metadata.",
+    ...recallToolPolicyLines()
   ];
 
   const workspace = context.workspace || {};
@@ -924,6 +1095,11 @@ function buildSystemMessage(params) {
     if (workspace.ragRecommended) {
       parts.push("Search may be needed for broader folder/workspace questions.");
     }
+  }
+
+  if (params.currentCodeTaskId) {
+    parts.push(`Current code task id: ${params.currentCodeTaskId}`);
+    if (params.currentCodeScopePath) parts.push(`Current code task scope: ${params.currentCodeScopePath}`);
   }
 
   if (Array.isArray(context.inlineBlocks) && context.inlineBlocks.length) {
@@ -1065,13 +1241,91 @@ function expandToolsForTurn(params, toolResult = {}) {
   const discovered = toolResult.expandedToolsForThisTurn
     || toolResult.recommendation?.enableForThisTurn
     || [];
+  const blockedNames = new Set((toolResult.blockedTools || []).map((item) => typeof item === "string" ? item : item.name));
+  const applied = [];
   for (const name of discovered) {
-    if (name) current.add(String(name));
+    if (!name || blockedNames.has(String(name))) continue;
+    if (!current.has(String(name))) applied.push(String(name));
+    current.add(String(name));
   }
   return {
-    ...params,
-    expandedToolsForThisTurn: Array.from(current)
+    params: {
+      ...params,
+      expandedToolsForThisTurn: Array.from(current)
+    },
+    applied,
+    blocked: toolResult.blockedTools || []
   };
+}
+
+function isMcpPublicToolName(name) {
+  return String(name || "").startsWith("mcp_");
+}
+
+function safeToolSegment(value) {
+  const safe = String(value || "")
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return safe || "tool";
+}
+
+function recallToolPolicyLines() {
+  return [
+    "Recall policy: use memory_search for compact long-term facts, preferences, project memories, folder memories, and session summaries.",
+    "Recall policy: use conversation_search to find past sessions/messages and conversation_read only after conversation_search returns concrete sessionId/messageIds.",
+    "Recall policy: do not treat memory_search results as exact transcripts; use conversation_read for exact wording and surrounding context."
+  ];
+}
+
+function isDocsearchTool(tool = {}) {
+  const text = `${tool.name || ""} ${tool.description || ""}`.toLowerCase();
+  return /\b(search|query|retrieve|lookup|find)\b/.test(text)
+    && /(doc|document|pdf|note|rag|chunk|semantic|index)/.test(text);
+}
+
+function normalizeDocsearchResults(mcpResult) {
+  const raw = Array.isArray(mcpResult?.results)
+    ? mcpResult.results
+    : Array.isArray(mcpResult?.content)
+      ? mcpResult.content
+      : Array.isArray(mcpResult)
+        ? mcpResult
+        : [];
+  return raw.map((item, index) => {
+    const parsed = parseMcpTextResult(item);
+    return {
+      path: parsed.path || item.path || item.uri || item.file || "",
+      title: parsed.title || item.title || item.name || "",
+      snippet: parsed.snippet || parsed.text || item.snippet || item.text || item.content || "",
+      score: Number.isFinite(Number(item.score)) ? Number(item.score) : undefined,
+      page: item.page ?? parsed.page,
+      chunkId: item.chunkId || item.chunk_id || parsed.chunkId || `${index + 1}`
+    };
+  }).filter((item) => item.path || item.snippet || item.title);
+}
+
+function parseMcpTextResult(item) {
+  if (!item || typeof item !== "object") return {};
+  if (item.type !== "text" || typeof item.text !== "string") return {};
+  const text = item.text.trim();
+  try {
+    const json = JSON.parse(text);
+    if (json && typeof json === "object") return json;
+  } catch {}
+  return { snippet: text };
+}
+
+function normalizeWorkspaceSearchResults(result = {}) {
+  const rows = Array.isArray(result.results) ? result.results : [];
+  return rows.map((item, index) => ({
+    path: item.path || "",
+    title: item.title || item.name || item.path || "",
+    snippet: item.snippet || item.text || "",
+    score: Number.isFinite(Number(item.score)) ? Number(item.score) : undefined,
+    page: item.page,
+    chunkId: item.chunkId || `${index + 1}`
+  }));
 }
 
 function trimTrailingSlash(value) {

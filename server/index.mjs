@@ -455,6 +455,18 @@ async function handleRequest(req, res) {
     }
 
     // --- Conversation Search & Read Routes ---
+    if (req.method === "GET" && url.pathname === "/api/conversations/search") {
+      const { executeConversationSearch } = await import("./lib/runtime/conversation-tools.mjs");
+      return sendJson(res, await executeConversationSearch(WORKSPACE_ROOT, {
+        query: url.searchParams.get("query") || "",
+        timeRange: url.searchParams.get("timeRange") || "",
+        scope: url.searchParams.get("scope") || "",
+        folderId: url.searchParams.get("folderId") || "",
+        projectId: url.searchParams.get("projectId") || "",
+        includeArchived: url.searchParams.get("includeArchived") === "true",
+        maxResults: parseInt(url.searchParams.get("maxResults") || "10", 10)
+      }));
+    }
     if (req.method === "POST" && url.pathname === "/api/conversations/search") {
       const body = await readJsonBody(req);
       const { executeConversationSearch } = await import("./lib/runtime/conversation-tools.mjs");
@@ -546,6 +558,31 @@ async function handleRequest(req, res) {
       const { searchMemory } = await import("./lib/runtime/memory-retrieval.mjs");
       return sendJson(res, await searchMemory(WORKSPACE_ROOT, query, { currentFolderId, currentProjectId, timeRange, maxResults }));
     }
+    if (req.method === "GET" && url.pathname === "/api/memory/settings") {
+      const { readMemorySettings } = await import("./lib/runtime/memory-retrieval.mjs");
+      return sendJson(res, await readMemorySettings(WORKSPACE_ROOT));
+    }
+    if (req.method === "POST" && url.pathname === "/api/memory/settings") {
+      const body = await readJsonBody(req);
+      const { writeMemorySettings } = await import("./lib/runtime/memory-retrieval.mjs");
+      return sendJson(res, await writeMemorySettings(WORKSPACE_ROOT, body));
+    }
+    if (req.method === "GET" && url.pathname === "/api/memory/candidates") {
+      const { listMemoryCandidates } = await import("./lib/runtime/memory-retrieval.mjs");
+      return sendJson(res, { candidates: await listMemoryCandidates(WORKSPACE_ROOT) });
+    }
+    const memoryCandidateApproveMatch = url.pathname.match(/^\/api\/memory\/candidates\/([^/]+)\/approve$/);
+    if (memoryCandidateApproveMatch && req.method === "POST") {
+      const body = await readJsonBody(req).catch(() => ({}));
+      const { approveMemoryCandidate } = await import("./lib/runtime/memory-retrieval.mjs");
+      return sendJson(res, await approveMemoryCandidate(WORKSPACE_ROOT, decodeURIComponent(memoryCandidateApproveMatch[1]), body));
+    }
+    const memoryCandidateRejectMatch = url.pathname.match(/^\/api\/memory\/candidates\/([^/]+)\/reject$/);
+    if (memoryCandidateRejectMatch && req.method === "POST") {
+      const body = await readJsonBody(req).catch(() => ({}));
+      const { rejectMemoryCandidate } = await import("./lib/runtime/memory-retrieval.mjs");
+      return sendJson(res, await rejectMemoryCandidate(WORKSPACE_ROOT, decodeURIComponent(memoryCandidateRejectMatch[1]), body.reason || "Rejected by user."));
+    }
     if (req.method === "POST" && url.pathname === "/api/memory") {
       const body = await readJsonBody(req);
       const memories = await getUserMemories();
@@ -590,8 +627,13 @@ async function handleRequest(req, res) {
       }
       if (req.method === "DELETE") {
         const memories = await getUserMemories();
+        const deletedMemory = memories.find(m => m.id === memoryId);
         const filtered = memories.filter(m => m.id !== memoryId);
         await saveUserMemories(filtered);
+        if (deletedMemory) {
+          const { recordDeletedMemoryTombstone } = await import("./lib/runtime/memory-retrieval.mjs");
+          await recordDeletedMemoryTombstone(WORKSPACE_ROOT, deletedMemory, "user_deleted");
+        }
         return sendJson(res, { ok: true });
       }
     }

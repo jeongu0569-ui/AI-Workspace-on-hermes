@@ -7,6 +7,7 @@ import path from "node:path";
 import { OpenAICompatibleRuntime } from "./openai-compatible-runtime.mjs";
 import { setCredentialValue, setDefaultModel, writeRuntimeConfig } from "./config-store.mjs";
 import { writeSecurityConfig } from "./security-policy.mjs";
+import { saveToolModeOverride } from "./tool-mode-registry.mjs";
 
 test("OpenAI-compatible runtime streams chat completions from AI Workspace config", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-"));
@@ -260,6 +261,8 @@ test("OpenAI-compatible runtime expands discovered safe tools within the same tu
       };
     }
   });
+  const events = [];
+  runtime.on("event", (event) => events.push(event));
 
   const result = await runtime.submitPrompt({
     sessionId: "session-discovery",
@@ -276,6 +279,60 @@ test("OpenAI-compatible runtime expands discovered safe tools within the same tu
   assert.equal(toolMessages[0].name, "tool_discovery");
   assert.equal(toolMessages[1].name, "docsearch_search");
   assert.match(toolMessages[1].content, /Notes\/rag\.md/);
+  assert.equal(events.some((event) => event.type === "tool.discovery.request"), true);
+  assert.equal(events.some((event) => event.type === "tool.discovery.result"), true);
+  assert.equal(events.some((event) => event.type === "tool.expansion.applied" && event.expandedTools.includes("docsearch_search")), true);
+
+  await runtime.submitPrompt({
+    sessionId: "session-discovery",
+    message: "다음 질문",
+    surface: "chat"
+  });
+  assert.equal(requests[3].tools.some((tool) => tool.function.name === "docsearch_search"), false);
+});
+
+test("OpenAI-compatible runtime blocks discovered tools disabled by surface mode", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-discovery-blocked-"));
+  await setDefaultModel(root, "custom", "demo-model");
+  await setCredentialValue(root, "custom", "AIW_CUSTOM_BASE_URL", "http://model.test/v1");
+  await setCredentialValue(root, "custom", "AIW_CUSTOM_API_KEY", "test-key");
+  await saveToolModeOverride(root, "chat", {
+    mode: "custom",
+    enabledTools: ["tool_discovery", "conversation_search", "conversation_read", "memory_search"],
+    disabledTools: ["docsearch_search"]
+  });
+
+  const requests = [];
+  const runtime = new OpenAICompatibleRuntime({
+    workspaceRoot: root,
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      if (requests.length === 1) {
+        return {
+          ok: true,
+          headers: { get: () => "text/event-stream" },
+          body: streamChunks([
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_discover","type":"function","function":{"name":"tool_discovery","arguments":"{\\"reason\\":\\"need indexed document search\\",\\"desiredCapability\\":\\"search indexed pdf notes documents\\"}"}}]}}]}\n\n',
+            'data: [DONE]\n\n'
+          ])
+        };
+      }
+      return {
+        ok: true,
+        headers: { get: () => "text/event-stream" },
+        body: streamChunks([
+          'data: {"choices":[{"delta":{"content":"검색 도구는 차단되어 있어요."}}]}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      };
+    }
+  });
+  const events = [];
+  runtime.on("event", (event) => events.push(event));
+
+  await runtime.submitPrompt({ sessionId: "blocked-discovery", message: "문서 검색", surface: "chat" });
+  assert.equal(requests[1].tools.some((tool) => tool.function.name === "docsearch_search"), false);
+  assert.equal(events.some((event) => event.type === "tool.expansion.blocked"), true);
 });
 
 async function* streamChunks(chunks) {
@@ -416,6 +473,37 @@ test("OpenAI-compatible runtime filters tools using disabledTools config", async
   assert.equal(sentTools.some(t => t.function.name === "workspace_read_file"), true);
 });
 
+test("OpenAI-compatible runtime global disabledTools can block core recall tools", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-core-disabled-"));
+  await setDefaultModel(root, "openai-api", "gpt-5.5");
+  await setCredentialValue(root, "openai-api", "AIW_OPENAI_API_KEY", "test-key");
+
+  await writeRuntimeConfig(root, {
+    defaultModel: { provider: "openai-api", model: "gpt-5.5" },
+    disabledTools: ["memory_search"]
+  });
+
+  let sentTools = null;
+  const runtime = new OpenAICompatibleRuntime({
+    workspaceRoot: root,
+    fetchImpl: async (_url, options) => {
+      sentTools = JSON.parse(options.body).tools;
+      return {
+        ok: true,
+        headers: { get: () => "text/event-stream" },
+        body: streamChunks([
+          'data: {"choices":[{"delta":{"content":"필터 완료"}}]}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      };
+    }
+  });
+
+  await runtime.submitPrompt({ sessionId: "session-core-disabled", message: "안녕", surface: "chat" });
+  assert.equal(sentTools.some(t => t.function.name === "memory_search"), false);
+  assert.equal(sentTools.some(t => t.function.name === "conversation_search"), true);
+});
+
 test("OpenAI-compatible runtime exposes MCP tools and executes them via stdio JSON-RPC", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-mcp-"));
   await setDefaultModel(root, "openai-api", "gpt-5.5");
@@ -517,11 +605,11 @@ rl.on("line", (line) => {
 
   await runtime.submitPrompt({ sessionId: "session-1", message: "계산해줘" });
   assert.ok(sentTools);
-  assert.equal(sentTools.some(t => t.function.name === "mcp_calculator_add"), true);
+  assert.equal(sentTools.some(t => t.function.name === "mcp__calculator__add"), true);
 
   const execResult = await runtime.executeToolCall({
     id: "call_mcp",
-    name: "mcp_calculator_add",
+    name: "mcp__calculator__add",
     arguments: '{"a":5,"b":10}'
   }, { sessionId: "session-1" });
 
@@ -529,6 +617,102 @@ rl.on("line", (line) => {
   assert.deepEqual(execResult.output, [{ type: "text", text: "15" }]);
 
   runtime.close();
+});
+
+test("OpenAI-compatible runtime routes MCP tools with underscores through the registry map", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-mcp-underscore-"));
+  await setDefaultModel(root, "openai-api", "gpt-5.5");
+  await setCredentialValue(root, "openai-api", "AIW_OPENAI_API_KEY", "test-key");
+  const serverPath = await writeMockMcpServer(root, {
+    tools: [
+      {
+        name: "search_pdf",
+        description: "Search indexed PDF documents",
+        inputSchema: { type: "object", properties: { query: { type: "string" } } }
+      }
+    ],
+    handler: "search_pdf"
+  });
+  await writeRuntimeConfig(root, {
+    defaultModel: { provider: "openai-api", model: "gpt-5.5" },
+    mcpServers: [
+      { name: "doc_search", command: "node", args: [serverPath], enabled: true }
+    ]
+  });
+
+  let sentTools = null;
+  const runtime = new OpenAICompatibleRuntime({
+    workspaceRoot: root,
+    fetchImpl: async (_url, options) => {
+      sentTools = JSON.parse(options.body).tools;
+      return {
+        ok: true,
+        headers: { get: () => "text/event-stream" },
+        body: streamChunks([
+          'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+          'data: [DONE]\n\n'
+        ])
+      };
+    }
+  });
+
+  await runtime.submitPrompt({ sessionId: "session-mcp-underscore", message: "search", surface: "notes" });
+  assert.equal(sentTools.some(t => t.function.name === "mcp__doc_search__search_pdf"), false);
+
+  const result = await runtime.executeToolCall({
+    id: "call_search_pdf",
+    name: "mcp__doc_search__search_pdf",
+    arguments: '{"query":"architecture"}'
+  }, { sessionId: "session-mcp-underscore" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.output, [{ type: "text", text: "search_pdf called 1" }]);
+  runtime.close();
+});
+
+test("OpenAI-compatible runtime docsearch_search prefers docsearch MCP and normalizes fallback", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-docsearch-mcp-"));
+  const serverPath = await writeMockMcpServer(root, {
+    tools: [
+      {
+        name: "search",
+        description: "Search indexed documents and PDFs",
+        inputSchema: { type: "object", properties: { query: { type: "string" } } }
+      }
+    ],
+    handler: "search"
+  });
+  await writeRuntimeConfig(root, {
+    mcpServers: [
+      { name: "obsidian_docsearch", command: "node", args: [serverPath], enabled: true }
+    ]
+  });
+
+  const runtime = new OpenAICompatibleRuntime({ workspaceRoot: root });
+  const result = await runtime.executeToolCall({
+    id: "call_docsearch",
+    name: "docsearch_search",
+    arguments: '{"query":"architecture"}'
+  }, { sessionId: "session-docsearch", surface: "notes" });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.source, "docsearch-mcp");
+  assert.equal(result.fallbackUsed, false);
+  assert.match(result.results[0].snippet, /search called 1/);
+  runtime.close();
+
+  const fallbackRoot = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-openai-runtime-docsearch-fallback-"));
+  await fs.mkdir(path.join(fallbackRoot, "Notes"), { recursive: true });
+  await fs.writeFile(path.join(fallbackRoot, "Notes", "a.md"), "architecture note", "utf8");
+  const fallbackRuntime = new OpenAICompatibleRuntime({ workspaceRoot: fallbackRoot });
+  const fallback = await fallbackRuntime.executeToolCall({
+    id: "call_docsearch_fallback",
+    name: "docsearch_search",
+    arguments: '{"query":"architecture"}'
+  }, { sessionId: "session-docsearch-fallback", surface: "notes" });
+  assert.equal(fallback.ok, true);
+  assert.equal(fallback.source, "workspace-search-fallback");
+  assert.equal(fallback.fallbackUsed, true);
+  assert.match(fallback.warning, /docsearch MCP/);
 });
 
 test("OpenAI-compatible runtime does not swallow MCP approvalRequired errors", async () => {

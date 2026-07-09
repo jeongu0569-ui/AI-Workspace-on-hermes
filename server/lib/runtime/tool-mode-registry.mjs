@@ -48,6 +48,13 @@ export const DEFAULT_TOOL_MODES = {
   }
 };
 
+export const CORE_RECALL_TOOLS = [
+  "tool_discovery",
+  "conversation_search",
+  "conversation_read",
+  "memory_search"
+];
+
 // Safe defaults for code
 export const SAFE_TOOL_MODES = {
   code: {
@@ -114,9 +121,9 @@ export async function loadToolModes(workspaceRoot) {
       requiresApproval = Array.from(new Set([...requiresApproval, ...overrideVal.requiresApproval]));
     }
 
-    // Crucial requirement: tool_discovery, conversation_search, conversation_read must always be enabled
-    const mandatory = ["tool_discovery", "conversation_search", "conversation_read"];
-    for (const m of mandatory) {
+    // Core recall tools are always available in each surface mode. The global
+    // runtime disabledTools config is still allowed to block them later.
+    for (const m of CORE_RECALL_TOOLS) {
       if (!enabledTools.includes(m)) {
         enabledTools.push(m);
       }
@@ -153,7 +160,7 @@ export async function getEffectiveToolMode(workspaceRoot, surface) {
   return modes[surface] || {
     surface,
     mode: "default",
-    enabledTools: DEFAULT_TOOL_MODES[surface]?.enabledTools || ["tool_discovery", "conversation_search", "conversation_read"],
+    enabledTools: DEFAULT_TOOL_MODES[surface]?.enabledTools || [...CORE_RECALL_TOOLS],
     requiresApproval: []
   };
 }

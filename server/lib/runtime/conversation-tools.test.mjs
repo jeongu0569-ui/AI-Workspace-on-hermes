@@ -191,3 +191,47 @@ test("Conversation Tools: read surrounding messages preserves message ids and re
   assert.equal(read.messages.filter((message) => message.id === "m-b").length, 1);
   assert.equal(read.messages.filter((message) => message.isTarget).length, 2);
 });
+
+test("Conversation Tools: archived sessions are hidden unless includeArchived is true", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-conversation-archived-"));
+  await fs.mkdir(path.join(root, ".ai-workspace", "sessions"), { recursive: true });
+
+  const session = {
+    id: "session-archived",
+    title: "Archived chat",
+    kind: "general",
+    createdAt: "2026-07-01T10:00:00+09:00",
+    updatedAt: "2026-07-01T10:00:00+09:00",
+    archivedAt: "2026-07-02T10:00:00+09:00",
+    archiveReason: "general_chat_overflow_30",
+    visibleInSidebar: false,
+    searchable: true,
+    messages: [
+      { id: "a1", role: "user", content: "archived keyword", createdAt: "2026-07-01T10:00:00+09:00" }
+    ],
+    summary: {
+      content: "Archived keyword summary.",
+      coveredMessageIds: ["a1"],
+      updatedAt: "2026-07-01T10:00:00+09:00"
+    }
+  };
+  await fs.writeFile(
+    path.join(root, ".ai-workspace", "sessions", "session-archived.json"),
+    JSON.stringify(session, null, 2),
+    "utf8"
+  );
+  await indexSession(root, session);
+
+  const hidden = await executeConversationSearch(root, {
+    query: "archived keyword"
+  });
+  assert.equal(hidden.results.length, 0);
+
+  const visible = await executeConversationSearch(root, {
+    query: "archived keyword",
+    includeArchived: true
+  });
+  assert.equal(visible.results.length > 0, true);
+  assert.equal(visible.results[0].archived, true);
+  assert.equal(visible.results[0].archiveReason, "general_chat_overflow_30");
+});

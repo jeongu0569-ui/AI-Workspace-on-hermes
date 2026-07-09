@@ -35,6 +35,10 @@ export const CONVERSATION_SEARCH_DEFINITION = {
           type: "string",
           description: "Filter search to a specific project."
         },
+        includeArchived: {
+          type: "boolean",
+          description: "Include archived sessions in search results."
+        },
         reason: {
           type: "string",
           description: "The reason why you are performing this conversation search."
@@ -88,7 +92,8 @@ export async function executeConversationSearch(workspaceRoot, args = {}) {
     scope: args.scope,
     maxResults: args.maxResults || 10,
     folderId: args.folderId,
-    projectId: args.projectId
+    projectId: args.projectId,
+    includeArchived: args.includeArchived === true
   };
   const results = await searchConversationIndex(workspaceRoot, query, options);
   return { results };

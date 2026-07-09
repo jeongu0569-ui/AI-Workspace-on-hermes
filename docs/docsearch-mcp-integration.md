@@ -51,6 +51,41 @@ When a folder, workspace, PDF, or broad notes request is detected, the context r
 
 The model can then call the search tool instead of receiving a huge prompt.
 
+When the model calls `docsearch_search`, the native runtime checks enabled MCP
+servers first. A server whose name/command/args look docsearch/RAG/document
+related and that exposes a search/query/retrieve tool is preferred. The runtime
+normalizes the response to:
+
+```json
+{
+  "ok": true,
+  "source": "docsearch-mcp",
+  "results": [
+    {
+      "path": "Notes/example.md",
+      "title": "example",
+      "snippet": "...",
+      "score": 0.82,
+      "page": 3,
+      "chunkId": "chunk-1"
+    }
+  ],
+  "fallbackUsed": false
+}
+```
+
+If no suitable MCP server is configured, AI Workspace falls back to native
+workspace search and returns:
+
+```json
+{
+  "ok": true,
+  "source": "workspace-search-fallback",
+  "fallbackUsed": true,
+  "warning": "docsearch MCP is not configured."
+}
+```
+
 ## Native RAG Path
 
 The native path starts with:
@@ -60,4 +95,3 @@ The native path starts with:
 - runtime injection fields: `searchResults` and `ragChunks`
 
 docsearch MCP remains useful while native vector storage is being implemented.
-

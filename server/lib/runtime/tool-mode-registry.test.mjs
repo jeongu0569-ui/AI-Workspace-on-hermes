@@ -42,11 +42,12 @@ test("Tool Mode Registry: saving override and custom mode", async () => {
   const modes = await loadToolModes(root);
   assert.equal(modes.chat.mode, "custom");
   assert.ok(modes.chat.enabledTools.includes("web_search"));
-  // memory_search is excluded because it was in disabledTools
-  assert.ok(!modes.chat.enabledTools.includes("memory_search"));
+  // Core recall tools are mandatory in surface modes, even when a custom mode tries to disable them.
+  assert.ok(modes.chat.enabledTools.includes("memory_search"));
   // tool_discovery is mandatory and must be preserved
   assert.ok(modes.chat.enabledTools.includes("tool_discovery"));
   assert.ok(modes.chat.enabledTools.includes("conversation_search"));
+  assert.ok(modes.chat.enabledTools.includes("conversation_read"));
 });
 
 test("Tool Mode Registry: safe mode overrides", async () => {

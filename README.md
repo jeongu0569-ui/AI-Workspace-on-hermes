@@ -44,6 +44,8 @@ This repository currently contains the first server-centered scaffold:
 - fuzzy conversation search/read over saved session summaries and messages
 - long-term user/project/folder/session memory extraction and search
 - count-based archive policy for unscoped `[Chat]` sessions: latest 30 visible
+- memory review policy: project/folder/session summary auto-save, user-global memory candidate review by default
+- docsearch MCP preferred path for indexed document/PDF search, with workspace search fallback
 - workspace context router for note/folder/PDF/workspace scopes
 - fallback workspace text search API
 - file metadata index API
@@ -152,12 +154,18 @@ POST /api/tool-modes/:surface
 GET  /api/tools/available
 POST /api/tools/discover
 POST /api/conversations/search
+GET  /api/conversations/search?query=...&includeArchived=true
 POST /api/conversations/read
 GET  /api/conversation-folders
 POST /api/conversation-folders
 POST /api/sessions/:id/archive
 POST /api/sessions/:id/unarchive
 GET  /api/memory/search
+GET  /api/memory/settings
+POST /api/memory/settings
+GET  /api/memory/candidates
+POST /api/memory/candidates/:id/approve
+POST /api/memory/candidates/:id/reject
 POST /api/memory
 POST /api/memory/extract-from-session
 GET  /api/agent/tasks
@@ -178,6 +186,15 @@ file/WebSocket URLs.
 The live endpoint accepts JSON commands such as `session.create`,
 `prompt.submit`, and `approval.respond`, then forwards runtime events back to
 the client.
+
+Core recall tools are always available in surface modes: `tool_discovery`,
+`conversation_search`, `conversation_read`, and `memory_search`. A surface
+override cannot remove them. The global/admin `disabledTools` config can still
+block them for safety or maintenance.
+
+`tool_discovery` expansion is turn-local. It can make safe tools available for
+the current model turn, records `tool.discovery.*` and `tool.expansion.*`
+events, and never persists the expansion into session state or global config.
 
 ## Documentation
 

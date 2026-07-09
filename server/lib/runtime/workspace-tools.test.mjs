@@ -72,6 +72,47 @@ test("Workspace tools read project files only under Code", async () => {
 
   await assert.rejects(
     () => executeWorkspaceTool(root, "read_project_file", { path: "Notes/a.md" }, { codeRuntime: {} }),
-    /only read files under Code/
+    /only read files under the current code scope 'Code'/
   );
+});
+
+test("Workspace tools use current code scope and task id defaults", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiw-workspace-tools-code-scope-"));
+  await fs.mkdir(path.join(root, "Projects", "demo"), { recursive: true });
+  await fs.mkdir(path.join(root, "Projects", "other"), { recursive: true });
+  await fs.writeFile(path.join(root, "Projects", "demo", "a.js"), "console.log('demo');", "utf8");
+  await fs.writeFile(path.join(root, "Projects", "other", "b.js"), "console.log('other');", "utf8");
+
+  const calls = [];
+  const codeRuntime = {
+    async proposePatch(taskId, params) {
+      calls.push(["proposePatch", taskId, params.changes.length]);
+      return { ok: true, taskId };
+    }
+  };
+
+  const file = await executeWorkspaceTool(root, "read_project_file", {
+    path: "Projects/demo/a.js"
+  }, {
+    codeRuntime,
+    currentCodeScopePath: "Projects/demo"
+  });
+  assert.equal(file.path, "Projects/demo/a.js");
+
+  await assert.rejects(
+    () => executeWorkspaceTool(root, "read_project_file", { path: "Projects/other/b.js" }, {
+      codeRuntime,
+      currentCodeScopePath: "Projects/demo"
+    }),
+    /current code scope 'Projects\/demo'/
+  );
+
+  const patch = await executeWorkspaceTool(root, "propose_patch", {
+    changes: [{ operation: "write", path: "a.js", content: "x" }]
+  }, {
+    codeRuntime,
+    currentCodeTaskId: "task-current"
+  });
+  assert.equal(patch.taskId, "task-current");
+  assert.deepEqual(calls, [["proposePatch", "task-current", 1]]);
 });

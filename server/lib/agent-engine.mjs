@@ -171,6 +171,7 @@ export class WorkspaceAgentEngine extends EventEmitter {
       const priorSession = params.sessionId ? await this.state.readSession(params.sessionId) : null;
       const history = this.sessionRuntime.promptHistory(priorSession);
       const memoryResults = await this.searchRelevantMemory(params, priorSession);
+      const codeTaskContext = await this.ensureCodeSurfaceTask(params, priorSession, context);
       if (params.sessionId) {
         await this.sessionRuntime.appendSessionMessage(params.sessionId, {
           role: "user",
@@ -189,6 +190,8 @@ export class WorkspaceAgentEngine extends EventEmitter {
         folderId: priorSession?.folderId || params.folderId || null,
         projectId: priorSession?.projectId || params.projectId || null,
         codeRuntime: this.codeRuntime,
+        currentCodeTaskId: codeTaskContext?.taskId || params.codeTaskId || null,
+        currentCodeScopePath: codeTaskContext?.scopePath || params.scopePath || null,
         taskId: task.id
       }).catch((error) => {
         if (this.chatRuntime.isAvailable()) throw error;
@@ -677,14 +680,71 @@ export class WorkspaceAgentEngine extends EventEmitter {
   async searchRelevantMemory(params, session) {
     try {
       const { searchMemory } = await import("./runtime/memory-retrieval.mjs");
-      return await searchMemory(this.config.workspaceRoot, params.prompt || params.message || "", {
+      const rawResults = await searchMemory(this.config.workspaceRoot, params.prompt || params.message || "", {
         currentFolderId: session?.folderId || params.folderId || "",
         currentProjectId: session?.projectId || params.projectId || "",
-        maxResults: 6
+        maxResults: 8
       });
+      const trimmed = [];
+      let usedChars = 0;
+      for (const memory of rawResults) {
+        const content = String(memory.content || "");
+        if (!content) continue;
+        if (usedChars + content.length > 2000) break;
+        trimmed.push(memory);
+        usedChars += content.length;
+      }
+      return trimmed;
     } catch {
       return [];
     }
+  }
+
+  async ensureCodeSurfaceTask(params, session, context = {}) {
+    const surface = session?.surface || params.surface || "";
+    if (surface !== "code") return null;
+    const existingTaskId = params.codeTaskId || session?.activeCodeTaskId || "";
+    if (existingTaskId) {
+      try {
+        const existing = await this.state.readTask(existingTaskId);
+        if (existing?.type === "code") {
+          return { taskId: existing.id, scopePath: existing.scopePath || params.scopePath || "Code" };
+        }
+      } catch {}
+    }
+
+    const workspace = context.workspaceContext?.workspace || context.workspace || {};
+    const scopePath = params.scopePath
+      || params.contextRequest?.scopePath
+      || workspace.scopePath
+      || workspace.activePath
+      || "Code";
+    const codeTask = await this.state.startTask({
+      type: "code",
+      runtime: "code-runtime",
+      sessionId: params.sessionId,
+      message: params.prompt || params.message || "Code chat context",
+      scopePath,
+      accessMode: params.accessMode || "safe",
+      requestedAction: "chat_context"
+    });
+    await this.state.finishTask(codeTask.id, {
+      status: "context_ready",
+      result: {
+        ok: true,
+        reason: "Code surface chat task context initialized."
+      }
+    });
+    if (params.sessionId) {
+      try {
+        const nextSession = await this.state.readSession(params.sessionId);
+        nextSession.activeCodeTaskId = codeTask.id;
+        nextSession.activeCodeScopePath = scopePath;
+        nextSession.updatedAt = new Date().toISOString();
+        await this.state.writeSession(nextSession);
+      } catch {}
+    }
+    return { taskId: codeTask.id, scopePath };
   }
 
   trackEventWrite(promise) {

@@ -3,6 +3,14 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { resolveTimeRange } from "./time-range.mjs";
 
+export const DEFAULT_MEMORY_SETTINGS = {
+  autoSaveProjectMemory: true,
+  autoSaveFolderMemory: true,
+  autoSaveSessionSummaryMemory: true,
+  autoSaveUserMemory: false,
+  memoryReviewRequired: true
+};
+
 export const MEMORY_SEARCH_DEFINITION = {
   type: "function",
   function: {
@@ -42,6 +50,7 @@ export async function searchMemory(workspaceRoot, query, context = {}) {
     const lines = data.split("\n").filter(Boolean).map(JSON.parse);
     lines.forEach(m => {
       candidates.push({
+        ...m,
         type: "user_memory",
         content: m.content,
         createdAt: m.createdAt || new Date().toISOString(),
@@ -59,6 +68,7 @@ export async function searchMemory(workspaceRoot, query, context = {}) {
       const list = JSON.parse(data);
       list.forEach(m => {
         candidates.push({
+          ...m,
           type: "folder_memory",
           folderId: context.currentFolderId,
           content: m.content,
@@ -77,6 +87,7 @@ export async function searchMemory(workspaceRoot, query, context = {}) {
       const lines = data.split("\n").filter(Boolean).map(JSON.parse);
       lines.forEach(m => {
         candidates.push({
+          ...m,
           type: "project_memory",
           projectId: context.currentProjectId,
           content: m.content,
@@ -116,26 +127,129 @@ export async function searchMemory(workspaceRoot, query, context = {}) {
     .filter((candidate) => isWithinTimeRange(candidate.createdAt, timeRange))
     .map(c => {
     const score = calculateMemoryScore(c, q, context);
-    return { ...c, score };
+    return { ...c, score, reason: buildMemoryReason(c, score, context) };
   });
 
   // Sort by score desc
   return scored
-    .filter(c => !q || c.score > 0.1)
+    .filter(c => !q || c.score >= memoryThreshold(c, context))
     .sort((a, b) => b.score - a.score || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, context.maxResults || 10);
 }
 
 export async function updateMemoryFromSession(workspaceRoot, session, options = {}) {
+  const settings = {
+    ...DEFAULT_MEMORY_SETTINGS,
+    ...(await readMemorySettings(workspaceRoot)),
+    ...(options.memorySettings || {})
+  };
   const candidates = extractMemoryCandidates(session, options);
   const saved = [];
+  const reviewCandidates = [];
+  const blocked = [];
+  const deletedHashes = await readDeletedMemoryHashes(workspaceRoot);
   for (const candidate of candidates) {
-    if (candidate.type === "user_memory") saved.push(await saveUserMemory(workspaceRoot, candidate));
-    else if (candidate.type === "project_memory") saved.push(await saveProjectMemory(workspaceRoot, candidate.projectId, candidate));
-    else if (candidate.type === "folder_memory") saved.push(await saveFolderMemory(workspaceRoot, candidate.folderId, candidate));
-    else if (candidate.type === "session_summary_memory") saved.push(await saveSessionSummaryMemory(workspaceRoot, candidate));
+    const normalized = normalizeMemory(candidate, candidate.type);
+    if (deletedHashes.has(normalized.contentHash)) {
+      blocked.push({ ...normalized, reason: "matches_deleted_memory_tombstone" });
+      continue;
+    }
+    if (isSensitiveMemory(normalized.content)) {
+      reviewCandidates.push(await saveMemoryCandidate(workspaceRoot, normalized, "sensitive_review_required"));
+      continue;
+    }
+    if (candidate.type === "user_memory") {
+      if (settings.autoSaveUserMemory && !settings.memoryReviewRequired) {
+        saved.push(await saveUserMemory(workspaceRoot, normalized));
+      } else {
+        reviewCandidates.push(await saveMemoryCandidate(workspaceRoot, normalized, "user_memory_review_required"));
+      }
+    } else if (candidate.type === "project_memory") {
+      if (settings.autoSaveProjectMemory) saved.push(await saveProjectMemory(workspaceRoot, candidate.projectId, normalized));
+      else reviewCandidates.push(await saveMemoryCandidate(workspaceRoot, normalized, "project_memory_review_required"));
+    } else if (candidate.type === "folder_memory") {
+      if (settings.autoSaveFolderMemory) saved.push(await saveFolderMemory(workspaceRoot, candidate.folderId, normalized));
+      else reviewCandidates.push(await saveMemoryCandidate(workspaceRoot, normalized, "folder_memory_review_required"));
+    } else if (candidate.type === "session_summary_memory") {
+      if (settings.autoSaveSessionSummaryMemory) saved.push(await saveSessionSummaryMemory(workspaceRoot, normalized));
+      else reviewCandidates.push(await saveMemoryCandidate(workspaceRoot, normalized, "session_summary_review_required"));
+    }
   }
-  return { saved };
+  return { saved, candidates: reviewCandidates, blocked };
+}
+
+export async function readMemorySettings(workspaceRoot) {
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "settings.json");
+  try {
+    const raw = JSON.parse(await fs.readFile(filePath, "utf8"));
+    return {
+      ...DEFAULT_MEMORY_SETTINGS,
+      ...Object.fromEntries(
+        Object.entries(raw || {}).filter(([, value]) => typeof value === "boolean")
+      )
+    };
+  } catch {
+    return { ...DEFAULT_MEMORY_SETTINGS };
+  }
+}
+
+export async function writeMemorySettings(workspaceRoot, patch = {}) {
+  const next = {
+    ...(await readMemorySettings(workspaceRoot)),
+    ...Object.fromEntries(
+      Object.entries(patch || {}).filter(([, value]) => typeof value === "boolean")
+    )
+  };
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "settings.json");
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(next, null, 2) + "\n", "utf8");
+  return next;
+}
+
+export async function listMemoryCandidates(workspaceRoot) {
+  const rows = [];
+  await collectJsonl(rows, path.join(workspaceRoot, ".ai-workspace", "memory", "candidates.jsonl"));
+  return rows.filter((item) => item.status !== "rejected" && item.status !== "approved");
+}
+
+export async function approveMemoryCandidate(workspaceRoot, candidateId, patch = {}) {
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "candidates.jsonl");
+  const rows = await readJsonl(filePath);
+  const idx = rows.findIndex((item) => item.id === candidateId);
+  if (idx === -1) throw Object.assign(new Error(`Memory candidate not found: ${candidateId}`), { status: 404 });
+  const candidate = normalizeMemory({ ...rows[idx], ...patch }, rows[idx].type);
+  let saved;
+  if (candidate.type === "user_memory") saved = await saveUserMemory(workspaceRoot, candidate);
+  else if (candidate.type === "project_memory") saved = await saveProjectMemory(workspaceRoot, candidate.projectId, candidate);
+  else if (candidate.type === "folder_memory") saved = await saveFolderMemory(workspaceRoot, candidate.folderId, candidate);
+  else saved = await saveSessionSummaryMemory(workspaceRoot, candidate);
+  rows[idx] = { ...rows[idx], status: "approved", approvedAt: new Date().toISOString(), savedMemoryId: saved.id };
+  await writeJsonl(filePath, rows);
+  return { ok: true, candidate: rows[idx], memory: saved };
+}
+
+export async function rejectMemoryCandidate(workspaceRoot, candidateId, reason = "rejected") {
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "candidates.jsonl");
+  const rows = await readJsonl(filePath);
+  const idx = rows.findIndex((item) => item.id === candidateId);
+  if (idx === -1) throw Object.assign(new Error(`Memory candidate not found: ${candidateId}`), { status: 404 });
+  rows[idx] = { ...rows[idx], status: "rejected", rejectedAt: new Date().toISOString(), rejectReason: reason };
+  await writeJsonl(filePath, rows);
+  return { ok: true, candidate: rows[idx] };
+}
+
+export async function recordDeletedMemoryTombstone(workspaceRoot, memory, reason = "user_deleted") {
+  const normalized = normalizeMemory(memory || {}, memory?.type || "user_memory");
+  const tombstone = {
+    id: `deleted-memory-${normalized.contentHash}`,
+    memoryId: normalized.id,
+    contentHash: normalized.contentHash,
+    reason,
+    deletedAt: new Date().toISOString()
+  };
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "deleted-memory-hashes.jsonl");
+  await upsertJsonl(filePath, tombstone);
+  return tombstone;
 }
 
 export async function readMemoryById(workspaceRoot, memoryId) {
@@ -305,14 +419,23 @@ function isWithinTimeRange(createdAt, range) {
 }
 
 async function upsertJsonl(filePath, memory) {
-  let list = [];
-  try {
-    list = (await fs.readFile(filePath, "utf8")).split("\n").filter(Boolean).map(JSON.parse);
-  } catch {}
+  const list = await readJsonl(filePath);
   const next = upsertArray(list, memory);
+  await writeJsonl(filePath, next);
+  return next.find((item) => item.id === memory.id || item.contentHash === memory.contentHash) || memory;
+}
+
+async function readJsonl(filePath) {
+  try {
+    return (await fs.readFile(filePath, "utf8")).split("\n").filter(Boolean).map(JSON.parse);
+  } catch {
+    return [];
+  }
+}
+
+async function writeJsonl(filePath, rows) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, next.map((item) => JSON.stringify(item)).join("\n") + "\n", "utf8");
-  return memory;
+  await fs.writeFile(filePath, rows.map((item) => JSON.stringify(item)).join("\n") + (rows.length ? "\n" : ""), "utf8");
 }
 
 async function collectJsonl(target, filePath) {
@@ -351,9 +474,22 @@ async function collectFolderMemory(target, dirPath) {
 }
 
 function upsertArray(list, memory) {
-  const idx = list.findIndex((item) => item.id === memory.id);
+  const idx = list.findIndex((item) =>
+    item.id === memory.id
+    || (item.contentHash && memory.contentHash && item.contentHash === memory.contentHash)
+    || similarMemoryContent(item.content, memory.content)
+  );
   if (idx >= 0) {
-    list[idx] = { ...list[idx], ...memory, createdAt: list[idx].createdAt || memory.createdAt, updatedAt: new Date().toISOString() };
+    list[idx] = {
+      ...list[idx],
+      ...memory,
+      id: list[idx].id || memory.id,
+      createdAt: list[idx].createdAt || memory.createdAt,
+      updatedAt: new Date().toISOString(),
+      sourceSessionIds: mergeArray(list[idx].sourceSessionIds, memory.sourceSessionIds),
+      sourceMessageIds: mergeArray(list[idx].sourceMessageIds, memory.sourceMessageIds),
+      tags: mergeArray(list[idx].tags, memory.tags)
+    };
     return list;
   }
   return [...list, memory];
@@ -361,10 +497,12 @@ function upsertArray(list, memory) {
 
 function normalizeMemory(memory, fallbackType) {
   const content = String(memory.content || "").trim();
+  const contentHash = memory.contentHash || hashMemoryContent(content);
   return {
     id: memory.id || stableMemoryId(fallbackType, memory.projectId || memory.folderId || "", content),
     type: memory.type || fallbackType,
     content,
+    contentHash,
     projectId: memory.projectId || undefined,
     folderId: memory.folderId || undefined,
     sourceSessionIds: memory.sourceSessionIds || [],
@@ -374,6 +512,62 @@ function normalizeMemory(memory, fallbackType) {
     updatedAt: memory.updatedAt || new Date().toISOString(),
     pinned: Boolean(memory.pinned)
   };
+}
+
+async function saveMemoryCandidate(workspaceRoot, memory, reason) {
+  const normalized = normalizeMemory(memory, memory.type || "user_memory");
+  const candidate = {
+    ...normalized,
+    id: `memory-candidate-${normalized.contentHash}`,
+    status: "pending",
+    reviewReason: reason,
+    candidateCreatedAt: new Date().toISOString()
+  };
+  const filePath = path.join(workspaceRoot, ".ai-workspace", "memory", "candidates.jsonl");
+  return await upsertJsonl(filePath, candidate);
+}
+
+async function readDeletedMemoryHashes(workspaceRoot) {
+  const rows = await readJsonl(path.join(workspaceRoot, ".ai-workspace", "memory", "deleted-memory-hashes.jsonl"));
+  return new Set(rows.map((row) => row.contentHash).filter(Boolean));
+}
+
+function isSensitiveMemory(content) {
+  const text = String(content || "");
+  return /(api[_ -]?key|password|passwd|secret|token|bearer|주민등록|여권|신용카드|credit card|private key)/i.test(text);
+}
+
+function hashMemoryContent(content) {
+  return crypto.createHash("sha256").update(normalizeContentForHash(content)).digest("hex").slice(0, 32);
+}
+
+function normalizeContentForHash(content) {
+  return String(content || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function similarMemoryContent(a, b) {
+  const left = normalizeContentForHash(a);
+  const right = normalizeContentForHash(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return left.length > 20 && right.length > 20 && (left.includes(right) || right.includes(left));
+}
+
+function mergeArray(a = [], b = []) {
+  return Array.from(new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])].filter(Boolean)));
+}
+
+function memoryThreshold(candidate, context) {
+  if (context.currentFolderId && candidate.folderId === context.currentFolderId) return 0.2;
+  if (context.currentProjectId && candidate.projectId === context.currentProjectId) return 0.2;
+  return Number.isFinite(Number(context.minScore)) ? Number(context.minScore) : 0.35;
+}
+
+function buildMemoryReason(candidate, score, context) {
+  if (context.currentFolderId && candidate.folderId === context.currentFolderId) return `folder match, score ${score}`;
+  if (context.currentProjectId && candidate.projectId === context.currentProjectId) return `project match, score ${score}`;
+  if (candidate.pinned) return `pinned memory, score ${score}`;
+  return `keyword/time relevance score ${score}`;
 }
 
 function stableMemoryId(...parts) {

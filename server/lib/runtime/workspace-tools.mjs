@@ -218,7 +218,7 @@ export const WORKSPACE_TOOL_DEFINITIONS = [
             }
           }
         },
-        required: ["taskId", "changes"]
+        required: ["changes"]
       }
     }
   },
@@ -235,7 +235,7 @@ export const WORKSPACE_TOOL_DEFINITIONS = [
           proposalId: { type: "string" },
           runChecksAfterApply: { type: "boolean" }
         },
-        required: ["taskId", "proposalId"]
+        required: ["proposalId"]
       }
     }
   },
@@ -251,7 +251,7 @@ export const WORKSPACE_TOOL_DEFINITIONS = [
           taskId: { type: "string" },
           commands: { type: "array", items: { type: "string" } }
         },
-        required: ["taskId"]
+        required: []
       }
     }
   },
@@ -269,7 +269,7 @@ export const WORKSPACE_TOOL_DEFINITIONS = [
           gitPushApproved: { type: "boolean" },
           dangerApproved: { type: "boolean" }
         },
-        required: ["taskId", "command"]
+        required: ["command"]
       }
     }
   }
@@ -427,8 +427,9 @@ async function executeCodeSurfaceTool(workspaceRoot, toolName, args, options = {
       path: args.path,
       maxChars: args.maxChars
     });
-    if (file.path !== "Code" && !file.path.startsWith("Code/")) {
-      throw Object.assign(new Error("read_project_file can only read files under Code/."), { status: 400 });
+    const scopePath = normalizeScopePath(options.currentCodeScopePath || args.scopePath || "Code");
+    if (!isPathInsideScope(file.path, scopePath)) {
+      throw Object.assign(new Error(`read_project_file can only read files under the current code scope '${scopePath}'.`), { status: 400 });
     }
     return file;
   }
@@ -439,12 +440,13 @@ async function executeCodeSurfaceTool(workspaceRoot, toolName, args, options = {
     return summary;
   }
   if (toolName === "get_git_diff") {
-    if (args.taskId && codeRuntime.state) {
-      const task = await codeRuntime.state.readTask(args.taskId);
+    const taskId = args.taskId || options.currentCodeTaskId;
+    if (taskId && codeRuntime.state) {
+      const task = await codeRuntime.state.readTask(taskId);
       const diffRef = task?.git?.diffRef || task?.patchProposals?.at?.(-1)?.diffRef || "";
       if (diffRef) {
         const diff = await readWorkspaceFile(workspaceRoot, { path: diffRef, maxChars: args.maxChars || 60000 });
-        return { taskId: args.taskId, diffRef, diff: diff.content, truncated: diff.truncated };
+        return { taskId, diffRef, diff: diff.content, truncated: diff.truncated };
       }
     }
     const scope = codeRuntime.resolveCodeScope(args.scopePath || "Code");
@@ -452,16 +454,35 @@ async function executeCodeSurfaceTool(workspaceRoot, toolName, args, options = {
     return { scopePath: scope.relativePath, isRepository: git.isRepository, diff: truncateMiddle(git.diff || "", args.maxChars || 60000) };
   }
   if (toolName === "propose_patch") {
-    return await codeRuntime.proposePatch(args.taskId, args);
+    return await codeRuntime.proposePatch(requireCurrentCodeTaskId(args, options), args);
   }
   if (toolName === "apply_patch") {
-    return await codeRuntime.applyPatch(args.taskId, { ...args, approved: options.approved === true });
+    return await codeRuntime.applyPatch(requireCurrentCodeTaskId(args, options), { ...args, approved: options.approved === true });
   }
   if (toolName === "run_checks") {
-    return await codeRuntime.runChecks(args.taskId, { ...args, approved: options.approved === true });
+    return await codeRuntime.runChecks(requireCurrentCodeTaskId(args, options), { ...args, approved: options.approved === true });
   }
   if (toolName === "run_git_command") {
-    return await codeRuntime.runGitCommand(args.taskId, { ...args, approved: options.approved === true });
+    return await codeRuntime.runGitCommand(requireCurrentCodeTaskId(args, options), { ...args, approved: options.approved === true });
   }
   throw Object.assign(new Error(`Unknown code surface tool: ${toolName}`), { status: 400 });
+}
+
+function requireCurrentCodeTaskId(args, options = {}) {
+  const taskId = args.taskId || options.currentCodeTaskId;
+  if (!taskId) {
+    throw Object.assign(new Error("This code tool requires a current code task id."), { status: 400 });
+  }
+  return taskId;
+}
+
+function normalizeScopePath(scopePath) {
+  const value = String(scopePath || "Code").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return value || "Code";
+}
+
+function isPathInsideScope(filePath, scopePath) {
+  const file = normalizeScopePath(filePath);
+  const scope = normalizeScopePath(scopePath);
+  return file === scope || file.startsWith(`${scope}/`);
 }
