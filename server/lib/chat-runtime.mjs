@@ -1,13 +1,6 @@
-export class ChatBackend {
-  async connect() {}
-  async createSession(params) {}
-  async resumeSession(sessionId) {}
-  async submitPrompt(params) {}
-  async respondToApproval(params) {}
-  async setAccessMode(sessionId, accessMode) {}
-  async setReasoning(sessionId, reasoningEffort) {}
-  close() {}
-}
+import { WorkspaceChatBackend } from "./workspace-chat-backend.mjs";
+
+import { ChatBackend } from "./chat-backend.mjs";
 
 export class HermesCompatChatBackend extends ChatBackend {
   constructor(hermesCompat) {
@@ -49,8 +42,14 @@ export class HermesCompatChatBackend extends ChatBackend {
 }
 
 export class ChatRuntime {
-  constructor({ hermesCompat }) {
-    this.backend = hermesCompat ? new HermesCompatChatBackend(hermesCompat) : null;
+  constructor({ hermesCompat, stateStore, authRuntime, providerRuntime }) {
+    if (hermesCompat) {
+      this.backend = new HermesCompatChatBackend(hermesCompat);
+    } else if (stateStore && authRuntime && providerRuntime) {
+      this.backend = new WorkspaceChatBackend({ stateStore, authRuntime, providerRuntime });
+    } else {
+      this.backend = null;
+    }
   }
 
   isAvailable() {

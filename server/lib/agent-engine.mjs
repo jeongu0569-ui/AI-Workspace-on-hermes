@@ -8,6 +8,9 @@ import { CodeAgentRuntime } from "./code-agent-runtime.mjs";
 import { ChatRuntime } from "./chat-runtime.mjs";
 import { ModelRuntime } from "./model-runtime.mjs";
 import { SessionRuntime } from "./session-runtime.mjs";
+import { ProviderRuntime } from "./provider-runtime.mjs";
+import { AuthRuntime } from "./auth-runtime.mjs";
+import { LLMRuntime } from "./llm-runtime.mjs";
 
 export function createWorkspaceAgentEngine(config) {
   const compat = config.hermes?.hermesServerUrl 
@@ -27,13 +30,22 @@ export class WorkspaceAgentEngine extends EventEmitter {
     this.compat = compat;
     
     this.state = new WorkspaceAgentStateStore(config.workspaceRoot);
-    this.chatRuntime = new ChatRuntime({ hermesCompat: compat });
+    this.providerRuntime = new ProviderRuntime({ stateStore: this.state });
+    this.authRuntime = new AuthRuntime({ stateStore: this.state });
+    this.chatRuntime = new ChatRuntime({
+      hermesCompat: compat,
+      stateStore: this.state,
+      authRuntime: this.authRuntime,
+      providerRuntime: this.providerRuntime
+    });
     this.modelRuntime = new ModelRuntime({ hermesCompat: compat, stateStore: this.state });
     this.sessionRuntime = new SessionRuntime({ hermesCompat: compat, stateStore: this.state });
+    this.llmRuntime = new LLMRuntime({ chatRuntime: this.chatRuntime });
     this.codeRuntime = new CodeAgentRuntime({
       workspaceRoot: config.workspaceRoot,
       stateStore: this.state,
-      hermes: config.hermes
+      hermes: compat,
+      llmRuntime: this.llmRuntime
     });
     this.eventWrites = new Set();
 
@@ -128,6 +140,20 @@ export class WorkspaceAgentEngine extends EventEmitter {
         status: "submitted",
         result
       });
+
+      if (params.sessionId) {
+        await this.sessionRuntime.appendSessionMessage(params.sessionId, {
+          role: "user",
+          content: params.prompt || params.message || ""
+        });
+        if (result.reply) {
+          await this.sessionRuntime.appendSessionMessage(params.sessionId, {
+            role: "assistant",
+            content: result.reply
+          });
+        }
+      }
+
       return {
         ...result,
         taskId: task.id,

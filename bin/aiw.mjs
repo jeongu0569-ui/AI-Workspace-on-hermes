@@ -866,6 +866,7 @@ async function runProvider(args) {
     console.log(`Usage:
   aiw provider [list] [--url URL] [--json]
   aiw provider set <providerName> --provider-url <url> [--url URL]
+  aiw provider remove <providerName> [--url URL]
 `);
     return;
   }
@@ -873,40 +874,43 @@ async function runProvider(args) {
   const baseUrl = workspaceUrl(options);
 
   if (subcommand === "list") {
-    const config = await requestJson(baseUrl, "/api/config");
+    const providers = await requestJson(baseUrl, "/api/workspace/providers");
     if (options.json) {
-      printJson(config.providers || {});
+      printJson(providers);
       return;
     }
-    const providers = Object.entries(config.providers || {});
     if (!providers.length) {
       console.log("No custom providers configured.");
       return;
     }
-    const rows = providers.map(([name, item]) => ({
-      provider: name,
-      url: item?.baseUrl || ""
+    const rows = providers.map((item) => ({
+      provider: item.id,
+      type: item.type || "openai-compatible",
+      url: item.baseUrl || ""
     }));
     printTable(rows, [
       ["provider", "PROVIDER", 20],
-      ["url", "BASE URL", 58]
+      ["type", "TYPE", 20],
+      ["url", "BASE URL", 38]
     ]);
-  } else if (subcommand === "set" || (subcommand && !providerName)) {
+  } else if (subcommand === "set" || (subcommand && subcommand !== "remove")) {
     const targetProvider = subcommand === "set" ? providerName : subcommand;
     const providerUrlValue = stringOption(options["provider-url"]) || stringOption(options.providerUrl);
     if (!targetProvider || !providerUrlValue) {
       throw new Error("Usage: aiw provider set <providerName> --provider-url <url>");
     }
 
-    const config = await requestJson(baseUrl, "/api/config");
-    if (!config.providers) config.providers = {};
-    config.providers[targetProvider] = { baseUrl: providerUrlValue };
-
-    await requestJson(baseUrl, "/api/config", {
+    await requestJson(baseUrl, `/api/workspace/providers`, {
       method: "POST",
-      body: config
+      body: { id: targetProvider, baseUrl: providerUrlValue, type: "openai-compatible" }
     });
     console.log(`Set provider '${targetProvider}' API URL to: ${providerUrlValue}`);
+  } else if (subcommand === "remove") {
+    if (!providerName) throw new Error("Usage: aiw provider remove <providerName>");
+    await requestJson(baseUrl, `/api/workspace/providers/${encodeURIComponent(providerName)}`, {
+      method: "DELETE"
+    });
+    console.log(`Successfully removed provider: ${providerName}`);
   } else {
     throw new Error(`Unknown provider subcommand '${subcommand}'.`);
   }
@@ -928,8 +932,7 @@ async function runAuth(args) {
   const baseUrl = workspaceUrl(options);
 
   if (subcommand === "list") {
-    const config = await requestJson(baseUrl, "/api/config");
-    const credentials = config.credentials || [];
+    const credentials = await requestJson(baseUrl, "/api/workspace/credentials");
     if (options.json) {
       printJson(credentials);
       return;
@@ -938,23 +941,11 @@ async function runAuth(args) {
       console.log("No credentials registered.");
       return;
     }
-    const rows = credentials.map((cred) => {
-      const rawKey = cred.apiKey || "";
-      const maskedKey = rawKey.length > 8 
-        ? `${rawKey.slice(0, 7)}...${rawKey.slice(-4)}` 
-        : "*".repeat(rawKey.length || 8);
-      return {
-        id: cred.id || "",
-        provider: cred.provider || "",
-        label: cred.label || "(none)",
-        key: maskedKey
-      };
-    });
-    printTable(rows, [
+    printTable(credentials, [
       ["id", "CREDENTIAL ID", 24],
       ["provider", "PROVIDER", 16],
       ["label", "LABEL", 24],
-      ["key", "API KEY", 22]
+      ["apiKey", "API KEY", 22]
     ]);
   } else if (subcommand === "add") {
     const provider = stringOption(options.provider);
@@ -964,33 +955,17 @@ async function runAuth(args) {
       throw new Error("Usage: aiw auth add --provider <provider> --key <key> [--label <label>]");
     }
 
-    const config = await requestJson(baseUrl, "/api/config");
-    if (!Array.isArray(config.credentials)) config.credentials = [];
-    
-    const id = `cred-${new Date().getTime()}`;
-    config.credentials.push({ id, provider, apiKey: key, label });
-
-    await requestJson(baseUrl, "/api/config", {
+    const result = await requestJson(baseUrl, "/api/workspace/credentials", {
       method: "POST",
-      body: config
+      body: { provider, apiKey: key, label }
     });
-    console.log(`Successfully added credential: ${id} for provider '${provider}'`);
+    console.log(`Successfully added credential: ${result.id} for provider '${provider}'`);
   } else if (subcommand === "remove" || (subcommand && subcommand !== "list" && subcommand !== "add")) {
     const idToRemove = subcommand === "remove" ? targetId : subcommand;
     if (!idToRemove) throw new Error("Usage: aiw auth remove <credentialId>");
 
-    const config = await requestJson(baseUrl, "/api/config");
-    const credentials = config.credentials || [];
-    const index = credentials.findIndex((c) => c.id === idToRemove);
-    if (index === -1) {
-      throw new Error(`Credential not found with ID: ${idToRemove}`);
-    }
-    credentials.splice(index, 1);
-    config.credentials = credentials;
-
-    await requestJson(baseUrl, "/api/config", {
-      method: "POST",
-      body: config
+    await requestJson(baseUrl, `/api/workspace/credentials/${encodeURIComponent(idToRemove)}`, {
+      method: "DELETE"
     });
     console.log(`Successfully removed credential: ${idToRemove}`);
   } else {

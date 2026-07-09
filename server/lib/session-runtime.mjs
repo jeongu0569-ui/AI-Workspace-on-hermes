@@ -66,6 +66,24 @@ export class SessionRuntime {
   }
 
   async getSessionMessages(sessionId) {
+    if (this.stateStore) {
+      try {
+        const session = await this.stateStore.readSession(sessionId);
+        if (session && Array.isArray(session.messages)) {
+          return {
+            sessionId,
+            messages: session.messages.map((m, idx) => ({
+              id: String(idx + 1),
+              role: m.role,
+              content: m.content,
+              timestamp: String(Math.floor(new Date(m.createdAt || 0).getTime() / 1000)),
+              toolName: "",
+              finishReason: "stop"
+            }))
+          };
+        }
+      } catch {}
+    }
     if (this.compat) {
       try {
         const result = await this.compat.fetchHermesJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
@@ -90,5 +108,26 @@ export class SessionRuntime {
       } catch {}
     }
     return { ok: true };
+  }
+
+  async appendSessionMessage(sessionId, message) {
+    if (this.stateStore) {
+      try {
+        const session = await this.stateStore.readSession(sessionId);
+        if (session) {
+          session.messages = session.messages || [];
+          session.messages.push({
+            role: message.role,
+            content: message.content,
+            createdAt: new Date().toISOString()
+          });
+          session.updatedAt = new Date().toISOString();
+          if (message.content) {
+            session.preview = message.content.slice(0, 60);
+          }
+          await this.stateStore.writeSession(session);
+        }
+      } catch {}
+    }
   }
 }

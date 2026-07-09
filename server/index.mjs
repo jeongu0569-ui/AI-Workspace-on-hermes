@@ -255,6 +255,40 @@ async function handleRequest(req, res) {
     if (req.method === "POST" && url.pathname === "/api/config") {
       return sendJson(res, await updateWorkspaceConfig(req));
     }
+    if (url.pathname === "/api/workspace/providers") {
+      if (req.method === "GET") {
+        return sendJson(res, await engine.providerRuntime.listProviders());
+      }
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        return sendJson(res, await engine.providerRuntime.addProvider(body.id, body), 201);
+      }
+    }
+    if (url.pathname.startsWith("/api/workspace/providers/")) {
+      const providerId = decodeURIComponent(url.pathname.slice("/api/workspace/providers/".length));
+      if (req.method === "PATCH") {
+        const body = await readJsonBody(req);
+        return sendJson(res, await engine.providerRuntime.updateProvider(providerId, body));
+      }
+      if (req.method === "DELETE") {
+        return sendJson(res, await engine.providerRuntime.removeProvider(providerId));
+      }
+    }
+    if (url.pathname === "/api/workspace/credentials") {
+      if (req.method === "GET") {
+        return sendJson(res, await engine.authRuntime.listCredentials());
+      }
+      if (req.method === "POST") {
+        const body = await readJsonBody(req);
+        return sendJson(res, await engine.authRuntime.addCredential(body), 201);
+      }
+    }
+    if (url.pathname.startsWith("/api/workspace/credentials/")) {
+      const credId = decodeURIComponent(url.pathname.slice("/api/workspace/credentials/".length));
+      if (req.method === "DELETE") {
+        return sendJson(res, await engine.authRuntime.removeCredential(credId));
+      }
+    }
     if (req.method === "GET" && url.pathname === "/api/search/status") {
       return sendJson(res, searchStatus(WORKSPACE_ROOT));
     }

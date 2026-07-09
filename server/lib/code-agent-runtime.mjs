@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileKind, joinWorkspacePath, resolveWorkspacePath } from "./path-utils.mjs";
 import { searchWorkspace } from "./search-service.mjs";
-import { HermesLiveClient } from "./hermes-live.mjs";
+import { HermesLiveClient } from "./hermes-compat.mjs";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -36,10 +36,11 @@ const TEXT_EXTENSIONS = new Set([
 const PATCH_CONTENT_LIMIT = 2 * 1024 * 1024;
 
 export class CodeAgentRuntime {
-  constructor({ workspaceRoot, stateStore, hermes }) {
+  constructor({ workspaceRoot, stateStore, hermes, llmRuntime }) {
     this.workspaceRoot = workspaceRoot;
     this.state = stateStore;
     this.hermes = hermes;
+    this.llmRuntime = llmRuntime;
   }
 
   async inspectTask(params = {}) {
@@ -274,7 +275,7 @@ export class CodeAgentRuntime {
     });
 
     const startedAt = new Date().toISOString();
-    const result = await runShellCommand(scope.absolutePath, command, params);
+    const result = await runGitFileCommand(scope.absolutePath, command, params);
     const finishedAt = new Date().toISOString();
 
     await this.state.recordToolLog({
@@ -343,10 +344,6 @@ export class CodeAgentRuntime {
   }
 
   async generateAutomaticPatch(taskId, params = {}) {
-    // TODO: Bypassing legacy HermesLiveClient to use unified ChatRuntime or LLMRuntime interface directly
-    if (!this.hermes || !this.hermes.hermesServerUrl) {
-      throw Object.assign(new Error("Automatic patch generation requires a configured chat backend."), { status: 503 });
-    }
     const task = await this.state.readTask(requireTaskId(taskId));
     if (task.type !== "code") {
       throw Object.assign(new Error("Only code tasks can generate automatic patches."), { status: 400 });
@@ -366,7 +363,36 @@ export class CodeAgentRuntime {
       } catch {}
     }
 
-    const systemPrompt = `You are an expert software developer.
+    await this.state.recordToolLog({
+      type: "code.patch.generate.start",
+      taskId: task.id,
+      scopePath: scope.relativePath
+    });
+
+    let patchSpec;
+
+    if (this.llmRuntime && this.llmRuntime.chatRuntime && this.llmRuntime.chatRuntime.isAvailable()) {
+      try {
+        const promptParams = {
+          instruction: task.message,
+          files: fileContents,
+          model: params.model,
+          provider: params.provider
+        };
+        const rawJsonList = await this.llmRuntime.generateCodePatch(promptParams);
+        patchSpec = {
+          summary: `Auto-patch to fulfill: ${task.message}`,
+          changes: rawJsonList.map(c => ({
+            path: c.path,
+            find: c.targetContent || c.find || "",
+            replace: c.replacementContent || c.replace || ""
+          }))
+        };
+      } catch (err) {
+        throw Object.assign(new Error(`Failed to generate automatic patch: ${err.message}`), { status: 500 });
+      }
+    } else if (this.hermes && this.hermes.hermesServerUrl) {
+      const systemPrompt = `You are an expert software developer.
 Your task is to generate a code patch proposal (a list of find/replace changes) to fulfill the user's instruction based on the provided file contents.
 
 You MUST respond with a single valid JSON object containing exactly two keys: "summary" and "changes".
@@ -387,7 +413,7 @@ Rules:
 - The "find" string must exist exactly as written in the target file, otherwise the patch application will fail.
 - Output ONLY the JSON object. Do not write any greetings or preambles.`;
 
-    const userPrompt = `Instruction: ${task.message}
+      const userPrompt = `Instruction: ${task.message}
 
 Workspace Root: ${this.workspaceRoot}
 
@@ -399,65 +425,61 @@ Content:
 ${f.content}
 ---`).join("\n")}`;
 
-    await this.state.recordToolLog({
-      type: "code.patch.generate.start",
-      taskId: task.id,
-      scopePath: scope.relativePath
-    });
+      const client = new HermesLiveClient(this.hermes);
+      await client.connect();
 
-    const client = new HermesLiveClient(this.hermes);
-    await client.connect();
-
-    const session = await client.createSession({
-      accessMode: "full",
-      reasoningEffort: "medium"
-    });
-
-    let answerText = "";
-    let resolveDone;
-    let rejectError;
-    const promise = new Promise((resolve, reject) => {
-      resolveDone = resolve;
-      rejectError = reject;
-    });
-
-    client.on("event", (envelope) => {
-      const type = envelope.type || "";
-      const text = envelope.text || "";
-
-      if (type === "message.delta" || type === "assistant.delta" || type === "assistant.message.delta") {
-        answerText += text;
-      } else if (
-        type === "message.done" ||
-        type === "response.done" ||
-        type === "turn.complete" ||
-        type === "turn.completed" ||
-        type === "message.completed"
-      ) {
-        resolveDone();
-      }
-    });
-
-    client.on("close", () => {
-      rejectError(new Error("Hermes connection closed prematurely."));
-    });
-
-    try {
-      await client.submitPrompt({
-        sessionId: session.sessionId,
-        message: systemPrompt + "\n\n" + userPrompt
+      const session = await client.createSession({
+        accessMode: "full",
+        reasoningEffort: "medium"
       });
 
-      await promise;
-    } finally {
-      client.close();
-    }
+      let answerText = "";
+      let resolveDone;
+      let rejectError;
+      const promise = new Promise((resolve, reject) => {
+        resolveDone = resolve;
+        rejectError = reject;
+      });
 
-    let patchSpec;
-    try {
-      patchSpec = parseJsonAnswer(answerText);
-    } catch (parseErr) {
-      throw Object.assign(new Error(`Failed to parse LLM patch response as JSON. Raw: ${answerText.slice(0, 300)}`), { status: 500 });
+      client.on("event", (envelope) => {
+        const type = envelope.type || "";
+        const text = envelope.text || "";
+
+        if (type === "message.delta" || type === "assistant.delta" || type === "assistant.message.delta") {
+          answerText += text;
+        } else if (
+          type === "message.done" ||
+          type === "response.done" ||
+          type === "turn.complete" ||
+          type === "turn.completed" ||
+          type === "message.completed"
+        ) {
+          resolveDone();
+        }
+      });
+
+      client.on("close", () => {
+        rejectError(new Error("Hermes connection closed prematurely."));
+      });
+
+      try {
+        await client.submitPrompt({
+          sessionId: session.sessionId,
+          message: systemPrompt + "\n\n" + userPrompt
+        });
+
+        await promise;
+      } finally {
+        client.close();
+      }
+
+      try {
+        patchSpec = parseJsonAnswer(answerText);
+      } catch (parseErr) {
+        throw Object.assign(new Error(`Failed to parse LLM patch response as JSON. Raw: ${answerText.slice(0, 300)}`), { status: 500 });
+      }
+    } else {
+      throw Object.assign(new Error("Automatic patch generation requires a configured chat backend."), { status: 503 });
     }
 
     if (!patchSpec || !Array.isArray(patchSpec.changes)) {
@@ -1459,4 +1481,81 @@ function truncateOutput(value) {
 
 function stringValue(value) {
   return typeof value === "string" ? value : "";
+}
+
+export function parseGitCommand(command) {
+  const parts = [];
+  let current = "";
+  let inQuotes = false;
+  let quoteChar = "";
+
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+
+    if (inQuotes) {
+      if (char === quoteChar) {
+        inQuotes = false;
+        quoteChar = "";
+      } else {
+        current += char;
+      }
+    } else {
+      if (char === '"' || char === "'") {
+        inQuotes = true;
+        quoteChar = char;
+      } else if (char === " " || char === "\t") {
+        if (current) {
+          parts.push(current);
+          current = "";
+        }
+      } else {
+        current += char;
+      }
+    }
+  }
+  if (current) {
+    parts.push(current);
+  }
+  return parts;
+}
+
+async function runGitFileCommand(cwd, command, params) {
+  const started = Date.now();
+  const timeoutMs = clampNumber(params.timeoutMs, 1000, 300000, 60000);
+  const parsed = parseGitCommand(command);
+
+  if (parsed[0] !== "git") {
+    throw new Error(`Only 'git' commands are permitted. Parsed executable: ${parsed[0]}`);
+  }
+  const args = parsed.slice(1);
+
+  try {
+    const { stdout, stderr } = await execFileAsync("git", args, {
+      cwd,
+      timeout: timeoutMs,
+      maxBuffer: 4 * 1024 * 1024,
+      env: {
+        ...process.env,
+        CI: process.env.CI || "1"
+      }
+    });
+    return {
+      command,
+      ok: true,
+      exitCode: 0,
+      durationMs: Date.now() - started,
+      stdout: truncateOutput(stdout),
+      stderr: truncateOutput(stderr)
+    };
+  } catch (error) {
+    return {
+      command,
+      ok: false,
+      exitCode: Number.isInteger(error?.code) ? error.code : 1,
+      signal: error?.signal || "",
+      durationMs: Date.now() - started,
+      stdout: truncateOutput(error?.stdout || ""),
+      stderr: truncateOutput(error?.stderr || "")
+    };
+  }
 }

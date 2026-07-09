@@ -6,13 +6,48 @@ export class ModelRuntime {
 
   async listModels() {
     let configModels = [];
+    let activeProviders = [];
     let source = "workspace-config";
     let hermesStatus = "disabled";
 
     if (this.stateStore) {
       try {
         const config = await this.stateStore.readConfig();
-        if (config?.model?.default) {
+        const providers = config.providers || {};
+        activeProviders = Object.entries(providers).map(([id, p]) => ({
+          id,
+          type: p.type || "openai-compatible",
+          baseUrl: p.baseUrl || "",
+          status: "unknown"
+        }));
+
+        for (const prov of activeProviders) {
+          try {
+            const res = await fetch(`${prov.baseUrl.replace(/\/$/, "")}/models`, {
+              signal: AbortSignal.timeout(3000)
+            });
+            if (res.ok) {
+              prov.status = "reachable";
+              const data = await res.json();
+              const list = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : [];
+              for (const m of list) {
+                configModels.push({
+                  id: m.id || m.name,
+                  name: m.name || m.id,
+                  provider: prov.id,
+                  source: "workspace-provider-api",
+                  isActive: config.model?.default === (m.id || m.name)
+                });
+              }
+            } else {
+              prov.status = "error";
+            }
+          } catch {
+            prov.status = "unreachable";
+          }
+        }
+
+        if (configModels.length === 0 && config?.model?.default) {
           configModels.push({
             id: config.model.default,
             name: config.model.default,
@@ -72,6 +107,7 @@ export class ModelRuntime {
       compat: {
         hermes: hermesStatus
       },
+      providers: activeProviders,
       models: mergedModels
     };
   }
