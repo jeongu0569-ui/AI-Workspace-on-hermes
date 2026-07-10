@@ -87,6 +87,7 @@ test("workspace agent engine persists streamed assistant replies into sessions",
   assert.deepEqual(stored.messages.map((message) => message.role), ["user", "assistant"]);
   assert.equal(stored.messages[0].content, "안녕");
   assert.equal(stored.messages[1].content, "안녕하세요");
+  assert.equal(stored.messages[1].reasoning, "생각 중입니다.");
 
   await engine.submitPrompt({
     sessionId: session.sessionId,
@@ -508,6 +509,18 @@ class StreamingAgentRuntime extends EventEmitter {
   async submitPrompt(params) {
     this.lastPrompt = params;
     this.emit("event", {
+      type: "reasoning.delta",
+      sessionId: params.sessionId,
+      taskId: params.taskId,
+      text: "생각 "
+    });
+    this.emit("event", {
+      type: "reasoning.delta",
+      sessionId: params.sessionId,
+      taskId: params.taskId,
+      text: "중입니다."
+    });
+    this.emit("event", {
       type: "message.delta",
       sessionId: params.sessionId,
       taskId: params.taskId,
@@ -529,7 +542,8 @@ class StreamingAgentRuntime extends EventEmitter {
       ok: true,
       sessionId: params.sessionId,
       runtimeSessionId: params.sessionId,
-      reply: "안녕하세요"
+      reply: "안녕하세요",
+      reasoning: "생각 중입니다."
     };
   }
 

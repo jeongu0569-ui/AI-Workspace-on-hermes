@@ -645,9 +645,22 @@ export class WorkspaceAgentEngine extends EventEmitter {
       const current = this.assistantTurnBuffers.get(key) || {
         sessionId,
         taskId,
-        content: ""
+        content: "",
+        reasoning: ""
       };
       current.content += text;
+      this.assistantTurnBuffers.set(key, current);
+      return;
+    }
+
+    if (isReasoningDeltaEvent(type)) {
+      const current = this.assistantTurnBuffers.get(key) || {
+        sessionId,
+        taskId,
+        content: "",
+        reasoning: ""
+      };
+      current.reasoning += text;
       this.assistantTurnBuffers.set(key, current);
       return;
     }
@@ -661,6 +674,7 @@ export class WorkspaceAgentEngine extends EventEmitter {
       this.trackEventWrite(this.sessionRuntime.appendSessionMessage(sessionId, {
         role: "assistant",
         content,
+        reasoning: current?.reasoning || "",
         taskId,
         source: "stream"
       }));
@@ -1070,6 +1084,13 @@ function assistantTurnKey(sessionId, taskId = "") {
 
 function isAssistantDeltaEvent(type) {
   return type === "message.delta" || type === "assistant.delta" || type === "assistant.message.delta";
+}
+
+function isReasoningDeltaEvent(type) {
+  return type === "reasoning.delta"
+    || type === "thinking.delta"
+    || type === "assistant.reasoning.delta"
+    || type === "assistant.thinking.delta";
 }
 
 function isAssistantCompleteEvent(type) {

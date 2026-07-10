@@ -635,7 +635,17 @@ struct MessageBubble: View {
     }
 
     private var activityPreview: String {
-        line.activityItems.last?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text = line.activityItems.last?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let lines = text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if lines.count >= 3 {
+            return lines.suffix(3).joined(separator: "\n")
+        }
+        let words = text.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard words.count > 36 else { return text }
+        return words.suffix(36).joined(separator: " ")
     }
 
     private var activityLabel: String {
