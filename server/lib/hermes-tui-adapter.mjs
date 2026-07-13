@@ -285,16 +285,16 @@ function configValue(params) {
       config: {
         display: {
           busy_input_mode: "queue",
-          details_mode: "expanded",
-          mouse_tracking: "off",
+          details_mode: "collapsed",
+          mouse_tracking: "all",
           sections: {
-            thinking: "expanded",
-            tools: "expanded",
+            thinking: "collapsed",
+            tools: "collapsed",
             activity: "collapsed"
           },
           show_reasoning: true,
           streaming: true,
-          tui_statusbar: "top"
+          tui_statusbar: "bottom"
         },
         paste_collapse_threshold: 5,
         paste_collapse_char_threshold: 2000,
@@ -649,14 +649,27 @@ function codmesSkin() {
     banner_hero: "Codmes",
     branding: {
       agent_name: "Codmes",
-      prompt: "❯"
+      prompt_symbol: "❯",
+      welcome: "Welcome to Codmes. Type your message or /help for commands.",
+      help_header: "Codmes commands"
     },
     colors: {
-      accent: "#a78bfa",
-      muted: "#8a8a8a",
-      ok: "#22c55e",
-      warn: "#f59e0b",
-      error: "#ef4444"
+      banner_accent: "#DAA520",
+      banner_border: "#CC9B1F",
+      banner_dim: "#CC9B1F",
+      banner_text: "#FFF8DC",
+      banner_title: "#FFD700",
+      prompt: "#FFF8DC",
+      session_border: "#CC9B1F",
+      session_label: "#CC9B1F",
+      ui_accent: "#DAA520",
+      ui_border: "#CC9B1F",
+      ui_error: "#ef5350",
+      ui_label: "#DAA520",
+      ui_ok: "#4caf50",
+      ui_primary: "#FFD700",
+      ui_text: "#FFF8DC",
+      ui_warn: "#ffa726"
     }
   };
 }

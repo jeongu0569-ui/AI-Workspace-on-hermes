@@ -2006,6 +2006,8 @@ async function runVendoredHermesTui(root) {
       env: {
         ...process.env,
         HERMES_TUI_GATEWAY_URL: adapter.url,
+        HERMES_TUI_INLINE: process.env.HERMES_TUI_INLINE || "1",
+        HERMES_TUI_MOUSE_TRACKING: process.env.HERMES_TUI_MOUSE_TRACKING || "1",
         HERMES_TUI_STARTUP_TIMEOUT_MS: process.env.HERMES_TUI_STARTUP_TIMEOUT_MS || "15000",
         HERMES_CWD: root
       },
