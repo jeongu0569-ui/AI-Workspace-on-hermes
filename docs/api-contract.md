@@ -59,6 +59,8 @@ rejected by `path-utils`.
 | POST | `/api/file/copy` | implemented | token when configured | Apple copy |
 | DELETE | `/api/file?path=...` | implemented | token when configured | Apple delete |
 | GET | `/api/file/metadata?path=...` | implemented | token when configured | available |
+| GET | `/api/file/annotations?path=...` | implemented | token when configured | Apple PDF annotations |
+| PUT | `/api/file/annotations?path=...` | implemented | token when configured | Apple PDF annotations |
 
 ## Raw Files And Uploads
 

@@ -125,6 +125,38 @@ struct UploadChunkResponse: Codable {
     let size: Int64
 }
 
+struct PDFAnnotationDocument: Codable {
+    var schemaVersion: Int
+    var documentPath: String
+    var updatedAt: String?
+    var pages: [PDFAnnotationPage]
+    var objects: [PDFAnnotationObject]
+}
+
+struct PDFAnnotationPage: Codable, Identifiable {
+    var id: Int { pageIndex }
+    var pageIndex: Int
+    var inkDataBase64: String?
+    var objects: [PDFAnnotationObject]?
+}
+
+struct PDFAnnotationObject: Codable, Identifiable {
+    var id: String
+    var type: String
+    var pageIndex: Int?
+    var bbox: AnnotationBoundingBox?
+    var text: String?
+    var dataBase64: String?
+    var metadata: [String: String]?
+}
+
+struct AnnotationBoundingBox: Codable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+}
+
 struct SearchResponse: Codable {
     struct Result: Codable, Identifiable {
         var id: String { path }

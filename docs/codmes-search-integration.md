@@ -104,7 +104,11 @@ The worker returns blocks with:
 open a search result at the matching page and highlight/copy OCR text. When
 Tesseract OCR is available, Codmes requests TSV output and stores line-level
 pixel bounding boxes plus normalized coordinates. The next client/PDF-viewer
-layer is to render those boxes as a selectable transparent text overlay.
+layer is to render those boxes as a selectable transparent text overlay. The
+Apple client now has the first server-owned PDF annotation layer in place:
+iOS/iPadOS page ink is stored through `GET/PUT /api/file/annotations`, while
+search-result page jumps, OCR highlight overlays, and selectable OCR text remain
+the next PDF/search integration step.
 
 ## Direction
 

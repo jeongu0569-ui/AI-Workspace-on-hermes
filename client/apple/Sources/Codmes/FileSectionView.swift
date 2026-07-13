@@ -517,7 +517,7 @@ struct FilePreviewView: View {
             if let rawFile = store.selectedRawFile {
                 HeaderView(title: rawFile.name, subtitle: rawFile.path)
                 if rawFile.kind == "pdf" {
-                    PDFPreviewView(url: rawFile.url)
+                    PDFWorkspaceView(rawFile: rawFile)
                 } else if rawFile.kind == "image" {
                     AsyncImage(url: rawFile.url) { phase in
                         switch phase {

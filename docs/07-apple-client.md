@@ -59,6 +59,7 @@ Implemented:
 - text/markdown file preview
 - markdown/text/code editing and save through `PUT /api/file`
 - PDF rendering through `GET /api/raw` and PDFKit
+- iOS/iPadOS PDF page ink through PencilKit and `GET/PUT /api/file/annotations`
 - image preview through `GET /api/raw`
 - workspace search UI
 - live chat connection through the Workspace Server
@@ -526,7 +527,9 @@ Platform-specific differences are handled with `#if os(macOS)` / `#if os(iOS)`.
 For example:
 
 - macOS uses `HSplitView`; iOS uses a stacked layout.
-- macOS PDF preview uses `NSViewRepresentable`; iOS uses `UIViewRepresentable`.
+- macOS PDF preview uses `NSViewRepresentable` with PDFKit. iOS uses
+  `UIViewRepresentable` with PDFKit page overlays and PencilKit so ink follows
+  the PDF page during scrolling and zooming.
 - macOS applies `.windowStyle(.titleBar)` and activation handling; iOS does not.
 
 Terminal support must be designed as a remote server feature, not as a

@@ -45,6 +45,31 @@ test("workspace server protects APIs with CODMES_SERVER_TOKEN and exposes manage
     assert.equal(metadata.path, "Notes/auth-note.md");
     assert.equal(metadata.kind, "markdown");
 
+    await fs.writeFile(path.join(workspaceRoot, "Documents", "sample.pdf"), "%PDF-1.4\n%%EOF", "utf8");
+    const emptyAnnotations = await fetchJson(`${baseUrl}/api/file/annotations?path=Documents/sample.pdf`, { token });
+    assert.equal(emptyAnnotations.documentPath, "Documents/sample.pdf");
+    assert.equal(emptyAnnotations.pages.length, 0);
+    const savedAnnotations = await fetchJson(`${baseUrl}/api/file/annotations?path=Documents/sample.pdf`, {
+      token,
+      method: "PUT",
+      body: {
+        schemaVersion: 1,
+        pages: [
+          {
+            pageIndex: 0,
+            inkDataBase64: "cGVuLWRhdGE=",
+            objects: [
+              { id: "highlight-1", type: "highlight", bbox: { x: 0.1, y: 0.2, width: 0.3, height: 0.04 } }
+            ]
+          }
+        ]
+      }
+    });
+    assert.equal(savedAnnotations.documentPath, "Documents/sample.pdf");
+    assert.equal(savedAnnotations.pages[0].pageIndex, 0);
+    const readAnnotations = await fetchJson(`${baseUrl}/api/file/annotations?path=Documents/sample.pdf`, { token });
+    assert.equal(readAnnotations.pages[0].inkDataBase64, "cGVuLWRhdGE=");
+
     const security = await fetchJson(`${baseUrl}/api/security`, { token });
     assert.equal(security.approvalMode, "auto");
     const updatedSecurity = await fetchJson(`${baseUrl}/api/security`, {

@@ -108,24 +108,28 @@ Example:
 
 ## PDF Strategy
 
-Phase 2 target is not full GoodNotes-level annotation yet. The stable order is:
+Phase 2 uses a GoodNotes-style structure with a thin first feature set:
 
 1. Serve PDFs as raw files for client preview.
 2. Store file metadata in `.codmes/index/files.json`.
 3. Add PDF/Office/HWP/Excel/image text extraction where possible.
 4. Add extracted text blocks to the search layer.
-5. Add server-side annotation storage.
-6. Add coordinate-accurate OCR overlays for PDF/image selection.
+5. Store server-owned annotation layers in `.codmes/annotations`.
+6. Add iOS/iPadOS page-level PencilKit ink overlays through PDFKit.
+7. Add coordinate-accurate OCR overlays for PDF/image selection.
 
 PDF annotations should not be stored only inside a client-local app cache. They
 should be workspace-owned so iPhone, iPad, and Mac see the same annotation
 state.
 
-Suggested later annotation state:
+Current annotation state:
 
 ```text
-.codmes/pdf-annotations/<file-hash>.json
+.codmes/annotations/<base64url-workspace-path>.json
 ```
+
+The current Apple implementation saves PencilKit ink per PDF page. The schema
+also leaves room for later `highlight`, `textBox`, and `imageBox` objects.
 
 ## RAG Direction
 

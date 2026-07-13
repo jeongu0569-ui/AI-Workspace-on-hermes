@@ -142,6 +142,18 @@ struct WorkspaceAPI {
         let _: EmptyResponse = try await request(components, method: "DELETE")
     }
 
+    func fileAnnotations(path: String) async throws -> PDFAnnotationDocument {
+        var components = try components("/api/file/annotations")
+        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        return try await request(components)
+    }
+
+    func saveFileAnnotations(path: String, annotations: PDFAnnotationDocument) async throws -> PDFAnnotationDocument {
+        var components = try components("/api/file/annotations")
+        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        return try await request(components, method: "PUT", body: annotations)
+    }
+
     func renderMarkdown(markdown: String) async throws -> String {
         let response: RenderedMarkdownResponse = try await post("/api/render/markdown", body: ["markdown": markdown])
         return response.html

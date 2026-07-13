@@ -218,6 +218,7 @@ async function ensureWorkspace() {
   await fs.mkdir(path.join(WORKSPACE_ROOT, WORKSPACE_DIRS.code), { recursive: true });
   await fs.mkdir(path.join(WORKSPACE_ROOT, WORKSPACE_DIRS.documents), { recursive: true });
   await fs.mkdir(path.join(WORKSPACE_ROOT, WORKSPACE_DIRS.attachments), { recursive: true });
+  await fs.mkdir(path.join(WORKSPACE_ROOT, ".codmes", "annotations"), { recursive: true });
   await writeJsonIfMissing(path.join(WORKSPACE_ROOT, ".codmes", "metadata.json"), {
     schemaVersion: 1,
     workspaceRoot: WORKSPACE_ROOT,
@@ -302,6 +303,12 @@ async function handleRequest(req, res) {
     }
     if (req.method === "GET" && url.pathname === "/api/file/metadata") {
       return sendJson(res, await fileMetadata(url));
+    }
+    if (req.method === "GET" && url.pathname === "/api/file/annotations") {
+      return sendJson(res, await readFileAnnotations(url));
+    }
+    if (req.method === "PUT" && url.pathname === "/api/file/annotations") {
+      return sendJson(res, await writeFileAnnotations(req, url));
     }
     if (req.method === "POST" && url.pathname === "/api/context") {
       return sendJson(res, await resolveContext(req));
@@ -1005,6 +1012,56 @@ async function deletePath(url) {
 async function fileMetadata(url) {
   const filePath = requireQuery(url, "path");
   return await readFileMetadata(WORKSPACE_ROOT, filePath);
+}
+
+async function readFileAnnotations(url) {
+  const filePath = requireQuery(url, "path");
+  const { relativePath, absolutePath } = resolveWorkspacePath(WORKSPACE_ROOT, filePath);
+  const stat = await fs.stat(absolutePath);
+  if (stat.isDirectory()) throw Object.assign(new Error("Cannot annotate a folder."), { status: 400 });
+  try {
+    return JSON.parse(await fs.readFile(annotationsPath(relativePath), "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    return emptyAnnotations(relativePath);
+  }
+}
+
+async function writeFileAnnotations(req, url) {
+  const filePath = requireQuery(url, "path");
+  const { relativePath, absolutePath } = resolveWorkspacePath(WORKSPACE_ROOT, filePath);
+  const stat = await fs.stat(absolutePath);
+  if (stat.isDirectory()) throw Object.assign(new Error("Cannot annotate a folder."), { status: 400 });
+  const body = await readJsonBody(req);
+  const annotations = normalizeAnnotations(relativePath, body);
+  await fs.mkdir(path.dirname(annotationsPath(relativePath)), { recursive: true });
+  await fs.writeFile(annotationsPath(relativePath), JSON.stringify(annotations, null, 2) + "\n", "utf8");
+  return annotations;
+}
+
+function annotationsPath(relativePath) {
+  const encoded = Buffer.from(relativePath, "utf8").toString("base64url");
+  return path.join(WORKSPACE_ROOT, ".codmes", "annotations", `${encoded}.json`);
+}
+
+function emptyAnnotations(relativePath) {
+  return {
+    schemaVersion: 1,
+    documentPath: relativePath,
+    updatedAt: null,
+    pages: [],
+    objects: []
+  };
+}
+
+function normalizeAnnotations(relativePath, body) {
+  return {
+    schemaVersion: Number.isSafeInteger(body.schemaVersion) ? body.schemaVersion : 1,
+    documentPath: relativePath,
+    updatedAt: new Date().toISOString(),
+    pages: Array.isArray(body.pages) ? body.pages : [],
+    objects: Array.isArray(body.objects) ? body.objects : []
+  };
 }
 
 async function resolveContext(req) {

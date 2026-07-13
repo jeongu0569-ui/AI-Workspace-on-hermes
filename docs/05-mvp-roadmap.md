@@ -117,7 +117,9 @@ Remaining:
 - Add right-side global chat panel polish.
 - Add upload manager progress and retry UX.
 - Add richer provider OAuth GUI flows.
-- Add native Apple Pencil/PDF annotation UX.
+- Add native Apple Pencil/PDF annotation UX: first iOS/iPadOS PencilKit page
+  overlay and server sync are done; text boxes, images, object editing, and PDF
+  export remain.
 
 ## Phase 5: Notes/PDF/Search
 
@@ -131,7 +133,9 @@ Status: in progress.
 
 Remaining:
 
-- PDF annotation and Apple Pencil storage/sync.
+- PDF annotation and Apple Pencil storage/sync: first pass done for iOS/iPadOS
+  page ink through `.codmes/annotations`.
 - Server-side thumbnails and page previews.
+- PDF text box/image box annotation objects and PDF export.
 - Search/index status UI.
 - More polished Codmes Search setup/status UX.

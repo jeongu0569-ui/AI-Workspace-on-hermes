@@ -388,6 +388,7 @@ WebSocket과 raw 파일 URL은 token query를 사용할 수 있습니다. Apple 
 <Workspace>/.codmes/approvals/    승인 대기 항목
 <Workspace>/.codmes/memory/       장기 메모리와 검토 후보
 <Workspace>/.codmes/index/        파일 및 검색 인덱스
+<Workspace>/.codmes/annotations/  PDF/문서 주석 레이어
 <Workspace>/.codmes/diffs/        패치와 diff 산출물
 <Workspace>/.codmes/tool-logs/    도구 실행 기록
 ```
@@ -397,7 +398,7 @@ WebSocket과 raw 파일 URL은 token query를 사용할 수 있습니다. Apple 
 - 내장 검색은 chunk index와 통합 문서 추출 캐시까지 지원합니다. 실제 임베딩 벡터 저장소와 semantic reranking은 다음 단계입니다.
 - 스캔 PDF/이미지 OCR은 `pdftoppm`/`tesseract`가 설치된 서버에서 처리됩니다. 좌표 기반 OCR 텍스트 선택/복사는 다음 단계입니다.
 - 텍스트 레이어가 있는 PDF와 Markdown/텍스트 파일은 기존 추출 및 Workspace 검색 경로로 처리합니다.
-- PDF 필기와 Apple Pencil 주석 저장은 완성되지 않았습니다.
+- PDF는 Apple PDFKit 기반으로 열고, iOS/iPadOS에서는 PencilKit 페이지 오버레이 필기를 `.codmes/annotations`에 저장하는 1차 구조가 들어갔습니다. 텍스트 박스, 이미지 박스, 오브젝트 편집, PDF export는 다음 단계입니다.
 - Code 화면은 아직 VS Code 수준의 LSP, 디버거, 확장 기능을 제공하지 않습니다.
 - 모델별 OAuth 흐름은 프로바이더마다 구현 수준이 다릅니다.
 - 도구 sandbox와 세밀한 파일 권한 정책은 추가 강화가 필요합니다.
