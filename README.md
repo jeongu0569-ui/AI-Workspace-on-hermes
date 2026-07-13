@@ -203,21 +203,24 @@ codmes model list
 codmes auth list
 ```
 
-OpenAI API 예시:
+OpenAI Codex 예시:
 
 ```bash
-codmes auth set openai-api OPENAI_API_KEY sk-...
-codmes model set-default openai-api gpt-5.4-mini
+codmes model
+# Providers -> OpenAI Codex -> sign in
 ```
 
-LM Studio 예시:
+자동화용 Ollama Local 예시:
 
 ```bash
-codmes auth set lmstudio LM_BASE_URL http://127.0.0.1:1234/v1
-codmes model set-default lmstudio local-model
+codmes auth set ollama-local CODMES_OLLAMA_BASE_URL http://127.0.0.1:11434
+codmes model set-default ollama-local gemma4:e2b-mlx
 ```
 
 로컬 Ollama는 실행 중인 서버에서 설치 모델을 조회해 바로 설정할 수 있습니다.
+일반 사용자-facing provider 목록은 현재 `openai-codex`, `ollama-cloud`,
+`ollama-local`만 노출합니다. 기타 provider 구현은 검증 전까지 앱/설정 화면에서
+숨깁니다.
 
 ```bash
 codmes ollama

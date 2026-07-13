@@ -91,9 +91,9 @@ npm run runtime:bootstrap
 codmes model
 codmes provider list
 codmes model list
-codmes model set-default openai-api gpt-5.4-mini
 codmes auth list
-codmes auth set openai-api OPENAI_API_KEY sk-...
+codmes auth set ollama-local CODMES_OLLAMA_BASE_URL http://127.0.0.1:11434
+codmes model set-default ollama-local gemma4:e2b-mlx
 ```
 
 Credential config is stored under:
@@ -124,26 +124,18 @@ Codmes owns a first OpenAI-compatible execution backend. Configure a
 provider/model pair, then `WS /api/live` can stream `message.delta` events
 without starting a separate AI runtime server.
 
-OpenAI API example:
+OpenAI Codex example:
 
 ```bash
-codmes model set-default openai-api gpt-5.4-mini
-codmes auth set openai-api OPENAI_API_KEY sk-...
+codmes model
+# Providers -> OpenAI Codex -> sign in
 ```
 
-LM Studio example:
+Ollama Local example:
 
 ```bash
-codmes model set-default lmstudio local-model
-codmes auth set lmstudio LM_BASE_URL http://127.0.0.1:1234/v1
-```
-
-Custom OpenAI-compatible endpoint example:
-
-```bash
-codmes model set-default custom my-model
-codmes auth set custom CODMES_CUSTOM_BASE_URL http://127.0.0.1:1234/v1
-codmes auth set custom CODMES_CUSTOM_API_KEY local-dev-key
+codmes auth set ollama-local CODMES_OLLAMA_BASE_URL http://127.0.0.1:11434
+codmes model set-default ollama-local gemma4:e2b-mlx
 ```
 
 Local Ollama shortcut:
@@ -157,6 +149,11 @@ The interactive route is `codmes model` -> `Ollama` -> `Ollama Local`. It stores
 the dedicated `ollama-local` provider rather than disguising the server as a
 generic custom endpoint. The Apple Settings screen uses the same provider and
 model APIs.
+
+The normal user-facing provider list intentionally exposes only OpenAI Codex,
+Ollama Cloud, and Ollama Local until the other provider transports are complete.
+Legacy custom endpoint config is still read for compatibility, but it is not
+shown as a primary setup path.
 
 The literal `ollama launch codmes` integration must be added by Ollama upstream;
 the local `codmes ollama` command performs the equivalent Codmes setup.

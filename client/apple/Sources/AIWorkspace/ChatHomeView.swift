@@ -16,6 +16,8 @@ struct ChatHomeView: View {
     var showsHeader = true
     @State private var draft = ""
     @State private var showingSessionManager = false
+    @State private var showingCreateGroupFolder = false
+    @State private var newGroupFolderName = ""
     @FocusState private var isDraftFocused: Bool
     @State private var isAtBottom = true
     @State private var isScrollingToBottom = false
@@ -291,6 +293,13 @@ struct ChatHomeView: View {
                     }
                 }
             }
+            Divider()
+            Button {
+                newGroupFolderName = ""
+                showingCreateGroupFolder = true
+            } label: {
+                Label("New group folder...", systemImage: "folder.badge.plus")
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "folder")
@@ -313,6 +322,15 @@ struct ChatHomeView: View {
             Task { await store.refreshHermesMetadata() }
         })
         .help("Select project")
+        .alert("New group folder", isPresented: $showingCreateGroupFolder) {
+            TextField("Folder name", text: $newGroupFolderName)
+            Button("Create") {
+                Task { await store.createConversationFolder(name: newGroupFolderName) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Sessions inside this folder share folder-level memory.")
+        }
     }
 
     private var sessionMenu: some View {
@@ -428,11 +446,27 @@ struct SessionManagerView: View {
             TextField("Search session title...", text: $store.sessionManagerSearch)
                 .textFieldStyle(.roundedBorder)
 
-            if store.filteredHermesSessions.isEmpty {
+            HStack(spacing: 8) {
+                Label(store.selectedHermesProjectTitle, systemImage: "folder")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if let folder = store.conversationFolders.first(where: { $0.id == store.selectedHermesProjectId }) {
+                    Button(role: .destructive) {
+                        Task { await store.deleteConversationFolder(folder) }
+                    } label: {
+                        Label("Delete folder", systemImage: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+            }
+
+            if store.filteredSessionsForSelectedHermesProject.isEmpty {
                 ContentUnavailableView("No sessions", systemImage: "clock", description: Text("No saved sessions match this search."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(store.filteredHermesSessions) { session in
+                List(store.filteredSessionsForSelectedHermesProject) { session in
                     HStack(spacing: 12) {
                         Button {
                             Task {
@@ -455,10 +489,38 @@ struct SessionManagerView: View {
                                         .foregroundStyle(.tertiary)
                                         .lineLimit(1)
                                 }
+                                if let folderTitle = session.folderTitle {
+                                    Label(folderTitle, systemImage: "folder.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                        .lineLimit(1)
+                                }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
+
+                        Menu {
+                            Button {
+                                Task { await store.moveSession(session, toFolderId: nil) }
+                            } label: {
+                                Label("No folder", systemImage: "tray")
+                            }
+                            if !store.conversationFolders.isEmpty {
+                                Divider()
+                                ForEach(store.conversationFolders) { folder in
+                                    Button {
+                                        Task { await store.moveSession(session, toFolderId: folder.id) }
+                                    } label: {
+                                        Label(folder.name, systemImage: "folder")
+                                    }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Move session to group folder")
 
                         Button(role: .destructive) {
                             pendingDelete = session

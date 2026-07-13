@@ -48,6 +48,7 @@ struct CreateSessionParams: Encodable {
     let reasoningEffort: String?
     let accessMode: String?
     let surface: String?
+    let folderId: String?
 }
 
 struct ResumeSessionParams: Encodable {
@@ -114,10 +115,10 @@ actor LiveChatClient {
         _ = try await send(command: "connect", params: EmptyParams())
     }
 
-    func createSession(provider: String? = nil, model: String? = nil, reasoningEffort: String? = nil, accessMode: String = "confirm", surface: String? = nil) async throws -> String {
+    func createSession(provider: String? = nil, model: String? = nil, reasoningEffort: String? = nil, accessMode: String = "confirm", surface: String? = nil, folderId: String? = nil) async throws -> String {
         let response = try await send(
             command: "session.create",
-            params: CreateSessionParams(provider: provider, model: model, reasoningEffort: reasoningEffort, accessMode: accessMode, surface: surface)
+            params: CreateSessionParams(provider: provider, model: model, reasoningEffort: reasoningEffort, accessMode: accessMode, surface: surface, folderId: folderId)
         )
         guard let sessionId = response.result?.sessionId else {
             throw LiveChatClientError.serverError("Runtime did not return a session id.")

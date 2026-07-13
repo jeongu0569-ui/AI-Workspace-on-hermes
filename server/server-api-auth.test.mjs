@@ -71,43 +71,44 @@ test("workspace server protects APIs with CODMES_SERVER_TOKEN and exposes manage
     assert.equal(doctor.audit.path, ".codmes/audit/audit.jsonl");
 
     const providers = await fetchJson(`${baseUrl}/api/providers`, { token });
-    assert.ok(providers.providers.some((provider) => provider.id === "custom"));
+    assert.equal(providers.providers.some((provider) => provider.id === "custom"), false);
+    assert.equal(providers.providers.some((provider) => provider.id === "openai-api"), false);
+    assert.ok(providers.providers.some((provider) => provider.id === "openai-codex"));
     assert.ok(providers.providers.some((provider) => provider.id === "ollama-local"));
 
-    const openAiModels = await fetchJson(`${baseUrl}/api/providers/openai-api/models`, { token });
-    assert.equal(openAiModels.provider, "openai-api");
+    const openAiModels = await fetchJson(`${baseUrl}/api/providers/openai-codex/models`, { token });
+    assert.equal(openAiModels.provider, "openai-codex");
     assert.ok(openAiModels.models.includes("gpt-5.4-mini"));
 
-    const storedAuth = await fetchJson(`${baseUrl}/api/auth/custom`, {
+    const storedAuth = await fetchJson(`${baseUrl}/api/auth/ollama-local`, {
       token,
       method: "POST",
       body: {
-        baseUrl: "http://127.0.0.1:9999/v1",
-        apiKey: "local-test-key"
+        baseUrl: "http://127.0.0.1:11434"
       }
     });
     assert.equal(storedAuth.ok, true);
-    assert.equal(storedAuth.provider, "custom");
+    assert.equal(storedAuth.provider, "ollama-local");
 
     const authStatus = await fetchJson(`${baseUrl}/api/auth`, { token });
-    const customAuth = authStatus.providers.find((provider) => provider.provider === "custom");
-    assert.equal(customAuth.configured, true);
+    const ollamaAuth = authStatus.providers.find((provider) => provider.provider === "ollama-local");
+    assert.equal(ollamaAuth.configured, true);
 
     const defaultModel = await fetchJson(`${baseUrl}/api/model/default`, {
       token,
       method: "POST",
-      body: { provider: "custom", model: "demo-model" }
+      body: { provider: "ollama-local", model: "demo-model" }
     });
-    assert.equal(defaultModel.defaultModel.provider, "custom");
+    assert.equal(defaultModel.defaultModel.provider, "ollama-local");
     assert.equal(defaultModel.defaultModel.model, "demo-model");
 
     const readDefault = await fetchJson(`${baseUrl}/api/model/default`, { token });
-    assert.equal(readDefault.defaultModel.id, "custom:demo-model");
+    assert.equal(readDefault.defaultModel.id, "ollama-local:demo-model");
 
     const models = await fetchJson(`${baseUrl}/api/models`, { token });
-    assert.ok(models.models.some((model) => model.id === "custom:demo-model"));
+    assert.ok(models.models.some((model) => model.id === "ollama-local:demo-model"));
 
-    const removedAuth = await fetchJson(`${baseUrl}/api/auth/custom/apiKey`, {
+    const removedAuth = await fetchJson(`${baseUrl}/api/auth/ollama-local/baseUrl`, {
       token,
       method: "DELETE"
     });

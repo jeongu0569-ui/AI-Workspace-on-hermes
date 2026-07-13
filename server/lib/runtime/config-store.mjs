@@ -47,6 +47,12 @@ export const BUILTIN_PROVIDERS = [
   { id: "google-antigravity", name: "Google Antigravity OAuth", authType: "oauth_external", tab: "accounts", env: ["AIW_GOOGLE_ANTIGRAVITY_TOKEN"], models: ["google-antigravity"] }
 ];
 
+const USER_FACING_PROVIDER_IDS = new Set([
+  "openai-codex",
+  "ollama-cloud",
+  "ollama-local"
+]);
+
 export function runtimeConfigDir(workspaceRoot) {
   return path.join(stateRoot(workspaceRoot), "config");
 }
@@ -60,7 +66,7 @@ export async function ensureRuntimeConfig(workspaceRoot) {
 }
 
 export function listProviderRegistry() {
-  return BUILTIN_PROVIDERS.map((provider) => ({
+  return BUILTIN_PROVIDERS.filter((provider) => USER_FACING_PROVIDER_IDS.has(provider.id)).map((provider) => ({
     ...provider,
     env: providerEnvKeys(provider),
     baseUrlEnv: primaryCodmesEnvKey(provider.baseUrlEnv)

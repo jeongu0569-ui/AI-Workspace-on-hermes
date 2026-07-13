@@ -287,6 +287,27 @@ struct WorkspaceAPI {
         let _: EmptyResponse = try await post("/api/model/default", body: body)
     }
 
+    func conversationFolders() async throws -> [ConversationFolder] {
+        try await get("/api/conversation-folders")
+    }
+
+    func createConversationFolder(name: String) async throws -> ConversationFolder {
+        try await post("/api/conversation-folders", body: ["name": name])
+    }
+
+    func deleteConversationFolder(folderId: String) async throws {
+        var components = try components("/api/conversation-folders/\(folderId)")
+        components.percentEncodedPath = "/api/conversation-folders/\(folderId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? folderId)"
+        let _: EmptyResponse = try await request(components, method: "DELETE")
+    }
+
+    func moveSessionToFolder(sessionId: String, folderId: String?) async throws {
+        var components = try components("/api/sessions/\(sessionId)/move-to-folder")
+        components.percentEncodedPath = "/api/sessions/\(sessionId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionId)/move-to-folder"
+        let body: [String: String] = ["folderId": folderId ?? ""]
+        let _: EmptyResponse = try await request(components, method: "POST", body: body)
+    }
+
     func surfaces() async throws -> [WorkspaceSurface] {
         let response: WorkspaceSurfacesResponse = try await get("/api/surfaces")
         return response.surfaces
@@ -529,8 +550,10 @@ private func collectHermesSessions(from object: Any, into sessions: inout [Herme
         ]
         let projectId = projectIdCandidates.compactMap { stringValue($0) }.first
         let projectTitle = projectTitleCandidates.compactMap { stringValue($0) }.first
+        let folderId = stringValue(dict["folder_id"]) ?? stringValue(dict["folderId"])
+        let folderTitle = stringValue(dict["folder_title"]) ?? stringValue(dict["folderTitle"])
         if messageCount > 0 || preview != nil || explicitTitle != nil {
-            sessions.append(HermesSessionSummary(id: id, title: title, updatedAt: updatedAt, projectId: projectId, projectTitle: projectTitle))
+            sessions.append(HermesSessionSummary(id: id, title: title, updatedAt: updatedAt, folderId: folderId, folderTitle: folderTitle, projectId: projectId, projectTitle: projectTitle))
         }
     }
     for key in ["sessions", "items", "data", "results"] {

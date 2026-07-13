@@ -45,3 +45,30 @@ test("Conversation Folders: CRUD and memory settings", async () => {
   const foldersPost = await listFolders(root);
   assert.equal(foldersPost.length, 0);
 });
+
+test("Conversation Folders: sessions can be moved into and out of folders", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codmes-conv-folder-session-"));
+  const sessionsDir = path.join(root, ".codmes", "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+
+  const folder = await createFolder(root, { name: "Project Alpha" });
+  const sessionId = "session-test-folder";
+  await fs.writeFile(path.join(sessionsDir, `${sessionId}.json`), JSON.stringify({
+    id: sessionId,
+    title: "Planning chat",
+    messages: [],
+    createdAt: new Date().toISOString()
+  }, null, 2), "utf8");
+
+  const moved = await moveSessionToFolder(root, sessionId, folder.id);
+  assert.equal(moved.folderId, folder.id);
+  assert.equal(moved.kind, "folder");
+
+  const stored = JSON.parse(await fs.readFile(path.join(sessionsDir, `${sessionId}.json`), "utf8"));
+  assert.equal(stored.folderId, folder.id);
+  assert.equal(stored.kind, "folder");
+
+  const unassigned = await moveSessionToFolder(root, sessionId, null);
+  assert.equal(unassigned.folderId, null);
+  assert.equal(unassigned.kind, "general");
+});

@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   ensureRuntimeConfig,
   envAliases,
+  listProviderRegistry,
   listCredentialStatus,
   providerEnvKeys,
   readCredentials,
@@ -15,6 +16,11 @@ import {
   setCredentialValue,
   setDefaultModel
 } from "./config-store.mjs";
+
+test("provider registry only exposes usable user-facing providers", () => {
+  const ids = listProviderRegistry().map((provider) => provider.id);
+  assert.deepEqual(ids, ["openai-codex", "ollama-cloud", "ollama-local"]);
+});
 
 test("Hermes-compatible custom endpoint config is executable by Codmes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "codmes-custom-model-"));

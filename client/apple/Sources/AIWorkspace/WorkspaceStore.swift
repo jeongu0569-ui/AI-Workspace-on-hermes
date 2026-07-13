@@ -33,6 +33,7 @@ final class WorkspaceStore: ObservableObject {
     @Published var isLoading = false
     @Published var sessionManagerSearch = ""
     @Published var selectedHermesProjectId = "__all__"
+    @Published var conversationFolders: [ConversationFolder] = []
     @Published var uploadItems: [UploadItem] = []
     @Published var agentTasks: [AgentTaskSummary] = []
     @Published var codeTasks: [AgentTaskSummary] = []
@@ -154,12 +155,57 @@ final class WorkspaceStore: ObservableObject {
         do {
             hermesModels = try await api.hermesModelOptions()
             hermesSessions = try await api.hermesSessions()
+            conversationFolders = try await api.conversationFolders()
             if selectedHermesModelId.isEmpty {
                 selectedHermesModelId = hermesModels.first?.id ?? ""
             }
             updateActiveSessionTitle()
         } catch {
             statusMessage = "Runtime metadata: \(error.localizedDescription)"
+        }
+    }
+
+    func createConversationFolder(name: String) async {
+        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else {
+            statusMessage = "Folder name is required"
+            return
+        }
+        guard let api else { return }
+        do {
+            let folder = try await api.createConversationFolder(name: cleaned)
+            conversationFolders.append(folder)
+            selectedHermesProjectId = folder.id
+            statusMessage = "Created group folder \(folder.name)"
+            await refreshHermesMetadata()
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func deleteConversationFolder(_ folder: ConversationFolder) async {
+        guard let api else { return }
+        do {
+            try await api.deleteConversationFolder(folderId: folder.id)
+            conversationFolders.removeAll { $0.id == folder.id }
+            if selectedHermesProjectId == folder.id {
+                selectedHermesProjectId = "__all__"
+            }
+            statusMessage = "Deleted group folder \(folder.name)"
+            await refreshHermesMetadata()
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func moveSession(_ session: HermesSessionSummary, toFolderId folderId: String?) async {
+        guard let api else { return }
+        do {
+            try await api.moveSessionToFolder(sessionId: session.id, folderId: folderId)
+            statusMessage = folderId == nil ? "Removed \(session.title) from group folder" : "Moved \(session.title)"
+            await refreshHermesMetadata()
+        } catch {
+            statusMessage = error.localizedDescription
         }
     }
 
@@ -1029,7 +1075,8 @@ final class WorkspaceStore: ObservableObject {
                 model: selectedModel?.model,
                 reasoningEffort: chatReasoningMode.effort,
                 accessMode: chatAccessMode.rawValue,
-                surface: activeChatSurface
+                surface: activeChatSurface,
+                folderId: selectedConversationFolderIdForNewSession
             )
             liveSessionId = sessionId
             activeHermesSessionTitle = "New session"
@@ -1144,12 +1191,22 @@ final class WorkspaceStore: ObservableObject {
     }
 
     var filteredHermesSessions: [HermesSessionSummary] {
+        filterSessions(hermesSessions)
+    }
+
+    var filteredSessionsForSelectedHermesProject: [HermesSessionSummary] {
+        filterSessions(sessionsForSelectedHermesProject)
+    }
+
+    private func filterSessions(_ sessions: [HermesSessionSummary]) -> [HermesSessionSummary] {
         let query = sessionManagerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return hermesSessions }
-        return hermesSessions.filter {
+        guard !query.isEmpty else { return sessions }
+        return sessions.filter {
             $0.title.lowercased().contains(query)
                 || $0.id.lowercased().contains(query)
                 || ($0.updatedAt ?? "").lowercased().contains(query)
+                || ($0.folderTitle ?? "").lowercased().contains(query)
+                || ($0.folderId ?? "").lowercased().contains(query)
                 || ($0.projectTitle ?? "").lowercased().contains(query)
                 || ($0.projectId ?? "").lowercased().contains(query)
         }
@@ -1160,13 +1217,19 @@ final class WorkspaceStore: ObservableObject {
             HermesSessionProject(id: "__all__", title: "All sessions", sessionCount: hermesSessions.count)
         ]
         var seen = Set(["__all__"])
+        for folder in conversationFolders {
+            let count = hermesSessions.filter { $0.folderId == folder.id }.count
+            projects.append(HermesSessionProject(id: folder.id, title: folder.name, sessionCount: count))
+            seen.insert(folder.id)
+        }
         for session in hermesSessions {
-            let rawId = session.projectId ?? session.projectTitle
+            if let folderId = session.folderId, seen.contains(folderId) { continue }
+            let rawId = session.folderId ?? session.projectId ?? session.projectTitle
             guard let rawId, !rawId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             let id = rawId
             guard seen.insert(id).inserted else { continue }
-            let count = hermesSessions.filter { ($0.projectId ?? $0.projectTitle) == id }.count
-            projects.append(HermesSessionProject(id: id, title: shortProjectTitle(session.projectTitle ?? id), sessionCount: count))
+            let count = hermesSessions.filter { ($0.folderId ?? $0.projectId ?? $0.projectTitle) == id }.count
+            projects.append(HermesSessionProject(id: id, title: shortProjectTitle(session.folderTitle ?? session.projectTitle ?? id), sessionCount: count))
         }
         return projects
     }
@@ -1177,7 +1240,11 @@ final class WorkspaceStore: ObservableObject {
 
     var sessionsForSelectedHermesProject: [HermesSessionSummary] {
         guard selectedHermesProjectId != "__all__" else { return hermesSessions }
-        return hermesSessions.filter { ($0.projectId ?? $0.projectTitle) == selectedHermesProjectId }
+        return hermesSessions.filter { ($0.folderId ?? $0.projectId ?? $0.projectTitle) == selectedHermesProjectId }
+    }
+
+    var selectedConversationFolderIdForNewSession: String? {
+        conversationFolders.contains { $0.id == selectedHermesProjectId } ? selectedHermesProjectId : nil
     }
 
     private func shortProjectTitle(_ value: String) -> String {

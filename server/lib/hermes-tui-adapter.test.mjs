@@ -10,7 +10,7 @@ import { readRuntimeConfig, setCredentialValue, setDefaultModel } from "./runtim
 test("Hermes TUI adapter exposes Codmes sessions, model picker data, and slash commands", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "codmes-hermes-tui-adapter-"));
   await setDefaultModel(root, "ollama-local", "gemma4:e2b-mlx");
-  await setCredentialValue(root, "openai-api", "CODMES_OPENAI_API_KEY", "test-key");
+  await setCredentialValue(root, "openai-codex", "access_token", "test-token");
 
   const adapter = await startHermesTuiAdapter({ workspaceRoot: root });
   const socket = new WebSocket(adapter.url);
@@ -43,7 +43,8 @@ test("Hermes TUI adapter exposes Codmes sessions, model picker data, and slash c
     const models = await rpc("model.options");
     assert.equal(models.model, "gemma4:e2b-mlx");
     assert.ok(models.providers.some((provider) => provider.slug === "ollama-local"));
-    assert.ok(models.providers.some((provider) => provider.slug === "openai-api" && provider.authenticated));
+    assert.ok(models.providers.some((provider) => provider.slug === "openai-codex" && provider.authenticated));
+    assert.equal(models.providers.some((provider) => provider.slug === "openai-api"), false);
 
     const created = await rpc("session.create");
     assert.ok(created.session_id);
@@ -59,12 +60,12 @@ test("Hermes TUI adapter exposes Codmes sessions, model picker data, and slash c
 
     const changed = await rpc("config.set", {
       key: "model",
-      value: "gpt-5.5 --provider openai-api --tui-session",
+      value: "gpt-5.5 --provider openai-codex --tui-session",
       session_id: created.session_id
     });
-    assert.equal(changed.value, "gpt-5.5 --provider openai-api");
+    assert.equal(changed.value, "gpt-5.5 --provider openai-codex");
     const config = await readRuntimeConfig(root);
-    assert.equal(config.defaultModel.provider, "openai-api");
+    assert.equal(config.defaultModel.provider, "openai-codex");
     assert.equal(config.defaultModel.model, "gpt-5.5");
   } finally {
     socket.close();

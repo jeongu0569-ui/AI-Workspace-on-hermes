@@ -663,7 +663,7 @@ async function handleRequest(req, res) {
       const engine = createAgentEngine();
       try {
         if (req.method === "GET") {
-          return sendJson(res, normalizeSessionsResponse(await engine.listSessions(200)));
+          return sendJson(res, await normalizeSessionsResponse(await engine.listSessions(200)));
         }
         if (req.method === "POST") {
           const body = await readJsonBody(req);
@@ -1513,7 +1513,7 @@ async function handleRuntimeProxy(req, res, url) {
       return sendJson(res, await engine.listModels());
     }
     if (isSessionsGet) {
-      return sendJson(res, normalizeSessionsResponse(await engine.listSessions(200)));
+      return sendJson(res, await normalizeSessionsResponse(await engine.listSessions(200)));
     }
     if (isSessionsPrune) {
       return sendJson(res, await engine.pruneSessions());
@@ -1547,12 +1547,19 @@ async function handleRuntimeProxy(req, res, url) {
   }
 }
 
-function normalizeSessionsResponse(value) {
+async function normalizeSessionsResponse(value) {
   const source = Array.isArray(value?.sessions) ? value.sessions
     : Array.isArray(value?.items) ? value.items
       : Array.isArray(value?.data) ? value.data
         : Array.isArray(value) ? value
           : [];
+  const folderTitleById = new Map();
+  try {
+    const { listFolders } = await import("./lib/runtime/conversation-folders.mjs");
+    for (const folder of await listFolders(WORKSPACE_ROOT)) {
+      folderTitleById.set(folder.id, folder.name);
+    }
+  } catch {}
   const seen = new Set();
   const sessions = [];
   for (const item of source) {
@@ -1564,12 +1571,16 @@ function normalizeSessionsResponse(value) {
     const explicitTitle = stringField(item.display_name, item.displayName, item.title, item.name, item.summary);
     const title = explicitTitle || preview
       || fallbackSessionTitle(item.model, id);
+    const folderId = stringField(item.folder_id, item.folderId);
+    const folderTitle = stringField(item.folder_title, item.folderTitle) || (folderId ? folderTitleById.get(folderId) : "");
     seen.add(id);
     sessions.push({
       id,
       title,
       model: stringField(item.model),
       preview,
+      folderId,
+      folderTitle,
       projectId: stringField(item.project_id, item.projectId, item.project?.id, item.workspace_id, item.workspaceId, item.scope_id, item.scopeId),
       projectTitle: stringField(item.project_title, item.projectTitle, item.project?.title, item.project?.name, item.workspace_title, item.workspaceTitle, item.workspace?.title, item.workspace?.name, item.cwd, item.git_repo_root, item.gitRepoRoot),
       updatedAt: stringField(item.updated_at, item.updatedAt, item.modified_at, item.modifiedAt, item.last_active, item.lastActive),

@@ -475,6 +475,8 @@ struct HermesSessionSummary: Identifiable, Hashable {
     let id: String
     let title: String
     let updatedAt: String?
+    let folderId: String?
+    let folderTitle: String?
     let projectId: String?
     let projectTitle: String?
 }
@@ -483,6 +485,15 @@ struct HermesSessionProject: Identifiable, Hashable {
     let id: String
     let title: String
     let sessionCount: Int
+}
+
+struct ConversationFolder: Identifiable, Codable, Hashable {
+    let id: String
+    var name: String
+    var icon: String?
+    var color: String?
+    var createdAt: String?
+    var updatedAt: String?
 }
 
 struct MarkdownTable: Identifiable {
