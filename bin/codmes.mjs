@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -51,7 +51,7 @@ async function main(argv) {
   if (!command) {
     if (process.stdin.isTTY) {
       const root = workspaceRoot({});
-      await runChatInteractive(root);
+      await runPromptToolkitChat(root);
       return;
     } else {
       printHelp();
@@ -65,6 +65,14 @@ async function main(argv) {
   }
 
   switch (command) {
+    case "chat-stdio":
+      await runChatStdio(args);
+      return;
+    case "chat-basic": {
+      const root = workspaceRoot(parseOptions(args));
+      await runChatInteractive(root);
+      return;
+    }
     case "serve":
       await runServe(args);
       return;
@@ -1842,6 +1850,117 @@ async function runChatInteractive(root) {
       resolveNextLine = resolve;
     });
   }
+}
+
+async function runPromptToolkitChat(root) {
+  const python = resolvePromptToolkitPython();
+  const script = path.join(REPO_ROOT, "bin", "codmes_tui.py");
+  if (!python) {
+    await runChatInteractive(root);
+    return;
+  }
+  await runProcess(python, [script, "--root", root, "--node", process.execPath, "--cli", fileURLToPath(import.meta.url)], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      PYTHONNOUSERSITE: "1"
+    },
+    stdio: "inherit",
+    resolveOnForwardedSignal: true,
+    notFoundMessage: "Codmes prompt_toolkit TUI runtime was not found."
+  });
+}
+
+function resolvePromptToolkitPython() {
+  const candidates = [
+    process.env.CODMES_RUNTIME_PYTHON,
+    process.env.AIW_RUNTIME_PYTHON,
+    path.join(REPO_ROOT, ".codmes-runtime", "bin", "python"),
+    path.join(REPO_ROOT, ".codmes-runtime", "Scripts", "python.exe"),
+    path.join(REPO_ROOT, ".aiw-runtime", "bin", "python"),
+    path.join(REPO_ROOT, ".aiw-runtime", "Scripts", "python.exe"),
+    "python3",
+    "python"
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ["-c", "import prompt_toolkit"], {
+      stdio: "ignore",
+      env: { ...process.env, PYTHONNOUSERSITE: "1" }
+    });
+    if (!probe.error && probe.status === 0) return candidate;
+  }
+  return "";
+}
+
+async function runChatStdio(args) {
+  const options = parseOptions(args);
+  const root = workspaceRoot(options);
+  const config = await readRuntimeConfig(root);
+  if (!config.defaultModel?.provider || !config.defaultModel?.model) {
+    writeJsonLine({
+      kind: "error",
+      error: "No default model is configured. Run `codmes model` first."
+    });
+    return;
+  }
+
+  const { createWorkspaceAgentEngine } = await import("../server/lib/agent-engine.mjs");
+  const engine = createWorkspaceAgentEngine({ workspaceRoot: root });
+  await engine.connect();
+  const sessionResult = await engine.createSession({
+    provider: config.defaultModel.provider,
+    model: config.defaultModel.model,
+    title: `CLI Chat ${new Date().toLocaleDateString()}`
+  });
+  const sessionId = sessionResult.sessionId;
+
+  engine.on("event", (event) => {
+    if (event.sessionId === sessionId) {
+      writeJsonLine({ kind: "event", event });
+    }
+  });
+  writeJsonLine({
+    kind: "ready",
+    provider: config.defaultModel.provider,
+    model: config.defaultModel.model,
+    workspaceRoot: root,
+    sessionId
+  });
+
+  const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      writeJsonLine({ kind: "error", error: "Invalid JSON command." });
+      continue;
+    }
+    if (message.command === "exit") break;
+    if (message.command !== "prompt.submit") {
+      writeJsonLine({ kind: "error", id: message.id, error: `Unknown command: ${message.command}` });
+      continue;
+    }
+    try {
+      const result = await engine.submitPrompt({
+        sessionId,
+        message: String(message.message || ""),
+        provider: config.defaultModel.provider,
+        model: config.defaultModel.model,
+        wait: true
+      });
+      writeJsonLine({ kind: "result", id: message.id, ok: true, result });
+    } catch (error) {
+      writeJsonLine({ kind: "result", id: message.id, ok: false, error: error.message });
+    }
+  }
+  rl.close();
+  engine.close();
+}
+
+function writeJsonLine(value) {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 function renderChatWelcome({ provider, model, workspaceRoot, sessionId }) {
