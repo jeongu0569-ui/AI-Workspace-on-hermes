@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { appendProviderCredentialEntry } from "./config-store.mjs";
+import {
+  appendProviderCredentialEntry,
+  patchProviderCredentialEntry,
+  readProviderCredentialEntry
+} from "./config-store.mjs";
 
 const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CODEX_OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const CODEX_OAUTH_ISSUER = "https://auth.openai.com";
+const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0";
 const sessions = new Map();
 
 export async function startCodexOAuthLogin({ workspaceRoot, fetchImpl = fetch, startPolling = true, pollDelayMs = null } = {}) {
@@ -72,6 +77,51 @@ export function cancelCodexOAuthLogin(id) {
   session.canceled = true;
   session.status = session.status === "approved" ? session.status : "canceled";
   return { id, canceled: true, status: session.status };
+}
+
+export async function discoverCodexModelIds({ workspaceRoot, fetchImpl = fetch, fallbackModels = [] } = {}) {
+  if (!workspaceRoot) {
+    throw Object.assign(new Error("workspaceRoot is required."), { status: 500 });
+  }
+  const fallback = dedupeStrings(fallbackModels);
+  const entry = await readProviderCredentialEntry(workspaceRoot, "openai-codex");
+  let accessToken = String(entry?.access_token || "").trim();
+  const refreshToken = String(entry?.refresh_token || "").trim();
+
+  if (accessToken && refreshToken && jwtExpiresSoon(accessToken, 120)) {
+    try {
+      const refreshed = await refreshCodexAccessToken({ refreshToken, fetchImpl });
+      accessToken = refreshed.accessToken;
+      await patchProviderCredentialEntry(workspaceRoot, "openai-codex", {
+        access_token: refreshed.accessToken,
+        refresh_token: refreshed.refreshToken || refreshToken,
+        last_refresh: new Date().toISOString()
+      });
+    } catch {
+      // Model discovery should not break the settings UI. Fall through to
+      // cached/static models; chat execution will surface auth errors later.
+    }
+  }
+
+  if (accessToken) {
+    const liveModels = await fetchCodexModelsFromApi({ accessToken, fetchImpl });
+    if (liveModels.length) {
+      await patchProviderCredentialEntry(workspaceRoot, "openai-codex", {
+        model_cache: {
+          models: liveModels,
+          cached_at: new Date().toISOString()
+        }
+      });
+      return { provider: "openai-codex", source: "codex-live", models: liveModels };
+    }
+  }
+
+  const cachedModels = dedupeStrings(entry?.model_cache?.models || []);
+  if (cachedModels.length) {
+    return { provider: "openai-codex", source: "codex-cache", models: cachedModels };
+  }
+
+  return { provider: "openai-codex", source: "registry", models: fallback };
 }
 
 async function pollCodexOAuthLogin(session) {
@@ -157,6 +207,62 @@ function publicCodexOAuthSession(session) {
   };
 }
 
+async function fetchCodexModelsFromApi({ accessToken, fetchImpl }) {
+  try {
+    const response = await fetchImpl(CODEX_MODELS_URL, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+        "user-agent": "codmes-server/0.0.0"
+      },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) return [];
+    const payload = await response.json();
+    const entries = Array.isArray(payload?.models) ? payload.models : [];
+    const sortable = [];
+    for (const item of entries) {
+      if (!item || typeof item !== "object") continue;
+      const slug = stringOrEmpty(item.slug);
+      if (!slug) continue;
+      const visibility = stringOrEmpty(item.visibility).toLowerCase();
+      if (visibility === "hide" || visibility === "hidden") continue;
+      const priority = Number.isFinite(Number(item.priority)) ? Number(item.priority) : 10000;
+      sortable.push({ slug, priority });
+    }
+    sortable.sort((a, b) => a.priority - b.priority || a.slug.localeCompare(b.slug));
+    return dedupeStrings(sortable.map((item) => item.slug));
+  } catch {
+    return [];
+  }
+}
+
+async function refreshCodexAccessToken({ refreshToken, fetchImpl }) {
+  const response = await fetchImpl(CODEX_OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+      "user-agent": "codmes-server/0.0.0"
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: CODEX_OAUTH_CLIENT_ID
+    })
+  });
+  if (!response.ok) {
+    throw new Error(`Codex OAuth refresh failed: ${response.status}`);
+  }
+  const payload = await response.json();
+  const accessToken = stringOrEmpty(payload.access_token);
+  if (!accessToken) throw new Error("Codex OAuth refresh returned no access token.");
+  return {
+    accessToken,
+    refreshToken: stringOrEmpty(payload.refresh_token)
+  };
+}
+
 function extractTokenProfile(accessToken, idToken, tokens) {
   const accessClaims = decodeJwtPayload(accessToken) || {};
   const idClaims = decodeJwtPayload(idToken) || {};
@@ -190,6 +296,25 @@ function decodeJwtPayload(token) {
 
 function stringOrEmpty(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function dedupeStrings(values) {
+  const result = [];
+  const seen = new Set();
+  for (const value of values || []) {
+    const item = stringOrEmpty(value);
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    result.push(item);
+  }
+  return result;
+}
+
+function jwtExpiresSoon(token, leewaySeconds = 120) {
+  const claims = decodeJwtPayload(token);
+  const exp = Number(claims?.exp || 0);
+  if (!Number.isFinite(exp) || exp <= 0) return false;
+  return exp * 1000 <= Date.now() + leewaySeconds * 1000;
 }
 
 function sleep(ms) {

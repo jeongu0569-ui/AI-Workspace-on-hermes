@@ -45,6 +45,7 @@ import { readSecurityConfig, writeSecurityConfig } from "./lib/runtime/security-
 import { enableSkill, listSkills, readSkill } from "./lib/runtime/skill-registry.mjs";
 import {
   cancelCodexOAuthLogin,
+  discoverCodexModelIds,
   readCodexOAuthLogin,
   startCodexOAuthLogin
 } from "./lib/runtime/codex-oauth.mjs";
@@ -1204,6 +1205,16 @@ async function discoverProviderModels(providerParam) {
       .map((item) => item.model || item.name)
       .filter(Boolean);
     return { provider: providerId, source: "ollama", baseUrl: `${host}/v1`, models };
+  }
+
+  if (providerId === "openai-codex") {
+    return {
+      ...(await discoverCodexModelIds({
+        workspaceRoot: WORKSPACE_ROOT,
+        fallbackModels: provider.models || []
+      })),
+      baseUrl: provider.defaultBaseUrl || null
+    };
   }
 
   return {

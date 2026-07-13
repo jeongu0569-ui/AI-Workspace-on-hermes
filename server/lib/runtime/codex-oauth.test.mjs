@@ -5,10 +5,12 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  discoverCodexModelIds,
   readCodexOAuthLogin,
   startCodexOAuthLogin
 } from "./codex-oauth.mjs";
 import {
+  appendProviderCredentialEntry,
   ensureRuntimeConfig,
   listProviderCredentialEntries
 } from "./config-store.mjs";
@@ -65,6 +67,49 @@ test("Codex OAuth login polls device flow and stores a new active credential", a
   assert.equal(entries[0].active, true);
   assert.equal(entries[0].email, "joengu0569@gmail.com");
   assert.equal(calls.some((call) => call.url.endsWith("/oauth/token")), true);
+});
+
+test("Codex model discovery prefers live OAuth catalog and caches it", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codmes-codex-models-"));
+  await ensureRuntimeConfig(root);
+  await appendProviderCredentialEntry(root, "openai-codex", {
+    label: "Codex test",
+    auth_type: "oauth",
+    access_token: fakeJwt({ exp: 1893456000 }),
+    refresh_token: "refresh-token"
+  });
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (String(url).includes("/backend-api/codex/models")) {
+      return jsonResponse(200, {
+        models: [
+          { slug: "gpt-5.7-orion", priority: 1 },
+          { slug: "gpt-5.6-sol", priority: 2 },
+          { slug: "gpt-hidden", visibility: "hidden", priority: 3 }
+        ]
+      });
+    }
+    return jsonResponse(404, {});
+  };
+
+  const result = await discoverCodexModelIds({
+    workspaceRoot: root,
+    fetchImpl,
+    fallbackModels: ["gpt-5.5"]
+  });
+
+  assert.equal(result.source, "codex-live");
+  assert.deepEqual(result.models, ["gpt-5.7-orion", "gpt-5.6-sol"]);
+  assert.equal(calls.some((call) => String(call.url).includes("/backend-api/codex/models")), true);
+
+  const cached = await discoverCodexModelIds({
+    workspaceRoot: root,
+    fetchImpl: async () => jsonResponse(500, {}),
+    fallbackModels: ["gpt-5.5"]
+  });
+  assert.equal(cached.source, "codex-cache");
+  assert.deepEqual(cached.models, ["gpt-5.7-orion", "gpt-5.6-sol"]);
 });
 
 function jsonResponse(status, payload) {
