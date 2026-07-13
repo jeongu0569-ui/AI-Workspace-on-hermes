@@ -58,6 +58,9 @@ test("OpenAI-compatible runtime streams chat completions from Codmes config", as
   assert.match(request.body.messages[0].content, /Notes\/a\.md/);
   assert.deepEqual(request.body.messages.slice(-3).map((m) => m.role), ["user", "assistant", "user"]);
   assert.deepEqual(events.map((event) => event.type), ["turn.start", "message.delta", "message.delta", "turn.complete"]);
+  assert.equal(typeof events[0].promptTokenEstimate, "number");
+  assert.equal(typeof events[0].contextWindow, "number");
+  assert.equal(typeof events[0].contextUsageRatio, "number");
 });
 
 test("OpenAI-compatible runtime streams Ollama reasoning deltas as activity events", async () => {

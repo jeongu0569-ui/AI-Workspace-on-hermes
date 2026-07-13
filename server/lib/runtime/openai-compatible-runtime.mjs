@@ -154,13 +154,18 @@ export class OpenAICompatibleRuntime extends EventEmitter {
         selection = await this.resolveModelSelection(activeParams);
         const systemPrompt = await this.buildSystemPrompt(activeParams);
         const messages = buildMessages(activeParams, systemPrompt);
+        const promptTokenEstimate = estimateMessagesTokens(messages);
+        const contextWindow = estimateContextWindow(selection.model);
 
         this.emit("event", {
           type: "turn.start",
           sessionId: params.sessionId,
           taskId: params.taskId,
           provider: selection.provider.id,
-          model: selection.model
+          model: selection.model,
+          promptTokenEstimate,
+          contextWindow,
+          contextUsageRatio: contextWindow ? promptTokenEstimate / contextWindow : null
         });
 
         const result = await this.runChatLoop(selection, messages, activeParams);
@@ -1480,6 +1485,29 @@ function codexCacheScopeId(sessionId) {
   if (!raw) return "";
   const digest = createHash("sha256").update(raw).digest("hex").slice(0, 24);
   return `codmes_${digest}`;
+}
+
+function estimateMessagesTokens(messages = []) {
+  const text = (messages || []).map((message) => {
+    if (!message || typeof message !== "object") return "";
+    const content = message.content;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content.map((part) => typeof part === "string" ? part : JSON.stringify(part || {})).join(" ");
+    }
+    return JSON.stringify(content || "");
+  }).join("\n");
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function estimateContextWindow(model = "") {
+  const id = String(model || "").toLowerCase();
+  if (!id) return null;
+  if (id.includes("gpt-5") || id.includes("gpt-4.1") || id.includes("gemini-2.5") || id.includes("gemini-3")) return 1_000_000;
+  if (id.includes("claude") || id.includes("opus") || id.includes("sonnet")) return 200_000;
+  if (id.includes("qwen") || id.includes("deepseek") || id.includes("kimi")) return 128_000;
+  if (id.includes("llama") || id.includes("gemma") || id.includes("mistral")) return 32_000;
+  return 128_000;
 }
 
 function getPartialMatch(str, target) {

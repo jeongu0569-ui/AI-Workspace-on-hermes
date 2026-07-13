@@ -22,12 +22,20 @@ export class RuntimeChatBackend extends ChatBackend {
     if (params.wait) {
       const replyPromise = new Promise((resolve, reject) => {
         let answerText = "";
+        let reasoningText = "";
         const onEvent = (envelope) => {
           const type = envelope.type || "";
           const text = envelope.text || envelope.payload?.text || (typeof envelope.payload === "string" ? envelope.payload : "");
 
           if (type === "message.delta" || type === "assistant.delta" || type === "assistant.message.delta") {
             answerText += text;
+          } else if (
+            type === "reasoning.delta" ||
+            type === "thinking.delta" ||
+            type === "assistant.reasoning.delta" ||
+            type === "assistant.thinking.delta"
+          ) {
+            reasoningText += text;
           } else if (
             type === "message.done" ||
             type === "response.done" ||
@@ -39,7 +47,8 @@ export class RuntimeChatBackend extends ChatBackend {
             resolve({
               ok: true,
               sessionId: params.sessionId,
-              reply: answerText
+              reply: answerText,
+              reasoning: reasoningText
             });
           }
         };

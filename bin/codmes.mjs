@@ -1726,6 +1726,12 @@ async function runChatInteractive(root) {
     title: `CLI Chat ${new Date().toLocaleDateString()}`
   });
   const sessionId = sessionResult.sessionId;
+  const chatState = {
+    model: config.defaultModel.model,
+    promptTokenEstimate: null,
+    contextWindow: null,
+    reasoningStarted: false
+  };
 
   renderChatWelcome({
     provider: config.defaultModel.provider,
@@ -1743,13 +1749,55 @@ async function runChatInteractive(root) {
   rl.prompt();
 
   const onEvent = (event) => {
-    if (event.sessionId === sessionId && event.type === "message.delta" && event.text) {
+    if (event.sessionId !== sessionId) return;
+    if (event.type === "turn.start") {
+      chatState.promptTokenEstimate = event.promptTokenEstimate || null;
+      chatState.contextWindow = event.contextWindow || null;
+      chatState.reasoningStarted = false;
+      return;
+    }
+    if (isReasoningEvent(event) && event.text) {
+      if (!chatState.reasoningStarted) {
+        chatState.reasoningStarted = true;
+        process.stdout.write(`${UI.dim}thinking...${UI.reset}\n`);
+      }
+      process.stdout.write(`${UI.dim}${event.text}${UI.reset}`);
+      return;
+    }
+    if (event.type === "message.delta" && event.text) {
+      if (chatState.reasoningStarted) {
+        process.stdout.write("\n");
+        chatState.reasoningStarted = false;
+      }
       process.stdout.write(event.text);
     }
   };
   engine.on("event", onEvent);
 
-  for await (const line of rl) {
+  const lineQueue = [];
+  let resolveNextLine = null;
+  let closed = false;
+  rl.on("line", (line) => {
+    if (resolveNextLine) {
+      const resolve = resolveNextLine;
+      resolveNextLine = null;
+      resolve(line);
+    } else {
+      lineQueue.push(line);
+    }
+  });
+  rl.on("close", () => {
+    closed = true;
+    if (resolveNextLine) {
+      const resolve = resolveNextLine;
+      resolveNextLine = null;
+      resolve(null);
+    }
+  });
+
+  for (;;) {
+    const line = await nextPromptLine();
+    if (line === null) break;
     const input = line.trim();
     if (!input) {
       rl.prompt();
@@ -1778,6 +1826,7 @@ async function runChatInteractive(root) {
       console.error(`\n${UI.red}Error:${UI.reset} ${error.message}`);
     }
     process.stdout.write("\n\n");
+    printChatStatus(chatState);
     rl.prompt();
   }
 
@@ -1785,6 +1834,14 @@ async function runChatInteractive(root) {
   engine.off("event", onEvent);
   engine.close();
   console.log(`\n${UI.dim}Chat session closed.${UI.reset}`);
+
+  function nextPromptLine() {
+    if (lineQueue.length) return Promise.resolve(lineQueue.shift());
+    if (closed) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      resolveNextLine = resolve;
+    });
+  }
 }
 
 function renderChatWelcome({ provider, model, workspaceRoot, sessionId }) {
@@ -1828,11 +1885,18 @@ function printChatHelp() {
   ]);
 }
 
-function printChatStatus({ model }) {
+function printChatStatus({ model, promptTokenEstimate = null, contextWindow = null }) {
   const width = chatTerminalWidth();
   const left = ` ${model || "no-model"} `;
-  const bar = "░".repeat(10);
-  const text = `${UI.border}${"─".repeat(width)}${UI.reset}\n${UI.purple}⚕${UI.reset}${UI.dim}${left}│ ctx -- │ [${bar}] -- │ ready${UI.reset}\n${UI.border}${"─".repeat(width)}${UI.reset}`;
+  const promptTokens = Number(promptTokenEstimate || 0);
+  const windowTokens = Number(contextWindow || 0);
+  const ratio = windowTokens > 0 && promptTokens > 0 ? Math.min(1, promptTokens / windowTokens) : 0;
+  const filled = windowTokens > 0 ? Math.max(0, Math.min(10, Math.round(ratio * 10))) : 0;
+  const bar = windowTokens > 0 ? `${"█".repeat(filled)}${"░".repeat(10 - filled)}` : "░".repeat(10);
+  const ctxText = windowTokens > 0
+    ? `${formatCompactNumber(promptTokens)} / ${formatCompactNumber(windowTokens)}`
+    : "--";
+  const text = `${UI.border}${"─".repeat(width)}${UI.reset}\n${UI.purple}⚕${UI.reset}${UI.dim}${left}│ ctx ${ctxText} │ [${bar}] ${Math.round(ratio * 100)}% │ ready${UI.reset}\n${UI.border}${"─".repeat(width)}${UI.reset}`;
   console.log(text);
 }
 
@@ -1867,6 +1931,22 @@ function fitText(value, maxWidth) {
 
 function visibleLength(value) {
   return String(value || "").replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+function formatCompactNumber(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "--";
+  if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}M`;
+  if (n >= 1_000) return `${Math.round(n / 100) / 10}K`;
+  return String(Math.round(n));
+}
+
+function isReasoningEvent(event) {
+  const type = String(event?.type || "");
+  return type === "reasoning.delta"
+    || type === "thinking.delta"
+    || type === "assistant.reasoning.delta"
+    || type === "assistant.thinking.delta";
 }
 
 async function runAuthInteractive(root) {
