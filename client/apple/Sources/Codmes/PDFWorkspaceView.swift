@@ -1537,6 +1537,19 @@ fileprivate final class PDFDrawingOverlayView: UIView {
     }
 }
 
+private extension UIView {
+    var descendantScrollViews: [UIScrollView] {
+        var result: [UIScrollView] = []
+        if let scrollView = self as? UIScrollView {
+            result.append(scrollView)
+        }
+        for subview in subviews {
+            result.append(contentsOf: subview.descendantScrollViews)
+        }
+        return result
+    }
+}
+
 fileprivate final class PDFPageAnnotationOverlay: UIView {
     let canvas = PKCanvasView()
     var objectViews: [String: UIView] = [:]
@@ -1611,6 +1624,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         view.pageOverlayViewProvider = context.coordinator
         let drawGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDrawingPan(_:)))
         drawGesture.maximumNumberOfTouches = 1
+        drawGesture.cancelsTouchesInView = true
         drawGesture.delegate = context.coordinator
         view.addGestureRecognizer(drawGesture)
         context.coordinator.drawingGesture = drawGesture
@@ -1748,6 +1762,27 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             pdfView.drawingOverlay.strokeColor = UIColor(hexString: penColorHex)
             pdfView.drawingOverlay.lineWidth = CGFloat(tool == .eraser ? eraserWidth : penWidth)
             drawingGesture?.isEnabled = !navigationEnabled
+            applyPDFScrollTouchPolicy()
+        }
+
+        private func applyPDFScrollTouchPolicy() {
+            guard let pdfView else { return }
+            let shouldReservePencilForDrawing = UIDevice.current.userInterfaceIdiom == .pad
+                && isWritingMode
+                && (tool == .pen || tool == .eraser)
+            if shouldReservePencilForDrawing {
+                drawingGesture?.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
+                for scrollView in pdfView.descendantScrollViews {
+                    scrollView.panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+                    scrollView.pinchGestureRecognizer?.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+                }
+            } else {
+                drawingGesture?.allowedTouchTypes = []
+                for scrollView in pdfView.descendantScrollViews {
+                    scrollView.panGestureRecognizer.allowedTouchTypes = []
+                    scrollView.pinchGestureRecognizer?.allowedTouchTypes = []
+                }
+            }
         }
 
         func applyAnnotationsToVisibleOverlays() {
