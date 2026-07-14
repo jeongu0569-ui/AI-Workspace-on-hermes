@@ -1957,6 +1957,13 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             var points: [CGPoint]
         }
 
+        private struct ShapeHandleDrag {
+            var pageIndex: Int
+            var strokeId: String
+            var kind: String
+            var handleIndex: Int
+        }
+
         weak var pdfView: AnnotatedPDFView?
         weak var drawingGesture: UIPanGestureRecognizer?
         weak var clearSelectionTapGesture: UITapGestureRecognizer?
@@ -1987,6 +1994,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         private var shapeHoldWorkItem: DispatchWorkItem?
         private var activeShapeFit: ShapeFit?
         private var activeShapeDragHandleIndex: Int?
+        private var activeShapeHandleDrag: ShapeHandleDrag?
         private var lastPenPointTime: TimeInterval = 0
         private var lastPenOverlayPoint: CGPoint?
         private var lassoInteraction: LassoInteraction?
@@ -2213,6 +2221,16 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 activePageIndex = pageIndex
                 activeStartTime = ProcessInfo.processInfo.systemUptime
                 lockPDFScrollingForActiveDrawing()
+                if let handleDrag = shapeHandleDrag(at: viewPoint, pageIndex: pageIndex) {
+                    activeShapeHandleDrag = handleDrag
+                    pdfView.drawingOverlay.cancel()
+                    if let overlay = overlays[pageIndex],
+                       let stroke = strokes(for: pageIndex).first(where: { $0.id == handleDrag.strokeId }) {
+                        removeCodmesInkAnnotation(id: stroke.id, from: page)
+                        updateShapeLayerPreview(stroke, in: overlay)
+                    }
+                    return
+                }
                 if tool == .pen {
                     pdfView.drawingOverlay.strokeColor = UIColor(hexString: penColorHex)
                     pdfView.drawingOverlay.lineWidth = CGFloat(penWidth)
@@ -2246,6 +2264,10 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 }
             case .changed:
                 guard let page = activePage else { return }
+                if let handleDrag = activeShapeHandleDrag {
+                    updateShapeHandleDrag(handleDrag, to: viewPoint, commit: false)
+                    return
+                }
                 if tool == .pen {
                     if let fit = activeShapeFit {
                         let adjusted = adjustedShapeFit(fit, to: overlayPoint, handleIndex: activeShapeDragHandleIndex)
@@ -2280,12 +2302,17 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     shapeHoldWorkItem = nil
                     activeShapeFit = nil
                     activeShapeDragHandleIndex = nil
+                    activeShapeHandleDrag = nil
                     lastPenOverlayPoint = nil
                     lassoInteraction = nil
                     lassoMoveStartPoint = nil
                     lassoMoveStartStrokes = []
                     lassoMoveStartObjects = []
                     unlockPDFScrollingAfterActiveDrawing()
+                }
+                if let handleDrag = activeShapeHandleDrag {
+                    updateShapeHandleDrag(handleDrag, to: viewPoint, commit: true)
+                    return
                 }
                 if tool == .lasso {
                     guard let page = activePage, let pageIndex = activePageIndex else {
@@ -2337,6 +2364,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 shapeHoldWorkItem = nil
                 activeShapeFit = nil
                 activeShapeDragHandleIndex = nil
+                activeShapeHandleDrag = nil
                 lastPenOverlayPoint = nil
                 lassoInteraction = nil
                 lassoMoveStartPoint = nil
@@ -2389,14 +2417,12 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            if isTouchOnShapeHandle(touch) {
-                return false
-            }
+            let isShapeHandleTouch = isTouchOnShapeHandle(touch)
             if gestureRecognizer === clearSelectionTapGesture {
-                return isWritingMode && tool == .lasso && lassoSelection != nil
+                return !isShapeHandleTouch && isWritingMode && tool == .lasso && lassoSelection != nil
             }
-            if touch.view?.isInShapeHandleHierarchy == true {
-                return false
+            if isShapeHandleTouch {
+                return isWritingMode
             }
             guard isWritingMode, tool == .pen || tool == .eraser || tool == .lasso else { return false }
             if UIDevice.current.userInterfaceIdiom == .pad {
@@ -2939,7 +2965,14 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             for (handleIndex, point) in shapeHandlePoints(for: stroke, kind: kind, in: overlay.bounds) {
                 let handle = PDFShapeHandleView(strokeId: stroke.id, kind: kind, handleIndex: handleIndex)
                 handle.center = point
-                handle.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(handleShapeHandlePan(_:))))
+                let pan = UIPanGestureRecognizer(target: self, action: #selector(handleShapeHandlePan(_:)))
+                pan.maximumNumberOfTouches = 1
+                pan.cancelsTouchesInView = true
+                pan.allowedTouchTypes = [
+                    NSNumber(value: UITouch.TouchType.direct.rawValue),
+                    NSNumber(value: UITouch.TouchType.pencil.rawValue)
+                ]
+                handle.addGestureRecognizer(pan)
                 overlay.addSubview(handle)
                 overlay.bringSubviewToFront(handle)
                 overlay.shapeHandleViews.append(handle)
@@ -3008,45 +3041,79 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             }
         }
 
-        @objc private func handleShapeHandlePan(_ gesture: UIPanGestureRecognizer) {
-            guard let handle = gesture.view as? PDFShapeHandleView,
-                  let overlay = handle.superview as? PDFPageAnnotationOverlay,
+        private func shapeHandleDrag(at viewPoint: CGPoint, pageIndex: Int) -> ShapeHandleDrag? {
+            guard let pdfView,
                   let selection = lassoSelection,
-                  selection.strokeIds.contains(handle.strokeId),
-                  var stroke = strokes(for: selection.pageIndex).first(where: { $0.id == handle.strokeId }) else { return }
+                  selection.pageIndex == pageIndex,
+                  let overlay = overlays[pageIndex] else { return nil }
+            let overlayPoint = overlay.convert(viewPoint, from: pdfView)
+            for view in overlay.shapeHandleViews.reversed() {
+                guard let handle = view as? PDFShapeHandleView,
+                      !handle.isHidden,
+                      handle.alpha > 0.01,
+                      handle.isUserInteractionEnabled,
+                      selection.strokeIds.contains(handle.strokeId) else { continue }
+                let handlePoint = handle.convert(overlayPoint, from: overlay)
+                if handle.point(inside: handlePoint, with: nil) {
+                    return ShapeHandleDrag(
+                        pageIndex: pageIndex,
+                        strokeId: handle.strokeId,
+                        kind: handle.kind,
+                        handleIndex: handle.handleIndex
+                    )
+                }
+            }
+            return nil
+        }
 
-            let location = gesture.location(in: overlay)
+        private func updateShapeHandleDrag(_ drag: ShapeHandleDrag, to viewPoint: CGPoint, commit: Bool) {
+            guard let pdfView,
+                  let overlay = overlays[drag.pageIndex],
+                  var stroke = strokes(for: drag.pageIndex).first(where: { $0.id == drag.strokeId }) else { return }
+            let location = overlay.convert(viewPoint, from: pdfView)
             let normalized = CodmesInkPoint(
                 x: Double(max(0, min(overlay.bounds.width, location.x)) / max(overlay.bounds.width, 1)),
                 y: Double(max(0, min(overlay.bounds.height, location.y)) / max(overlay.bounds.height, 1)),
                 pressure: nil,
                 timeOffset: nil
             )
-            stroke = updateShapeStroke(stroke, kind: handle.kind, handleIndex: handle.handleIndex, to: normalized)
-            replaceLocalStrokes(pageIndex: selection.pageIndex, movedStrokes: [stroke], selectedIds: [stroke.id])
-            if gesture.state == .began,
-               let pdfView,
-               let page = pdfView.document?.page(at: selection.pageIndex) {
-                removeCodmesInkAnnotation(id: stroke.id, from: page)
-            }
+            stroke = updateShapeStroke(stroke, kind: drag.kind, handleIndex: drag.handleIndex, to: normalized)
+            replaceLocalStrokes(pageIndex: drag.pageIndex, movedStrokes: [stroke], selectedIds: [stroke.id])
             if let nextBounds = bounds(for: stroke.points) {
                 lassoSelection = LassoSelection(
-                    pageIndex: selection.pageIndex,
-                    strokeIds: selection.strokeIds,
-                    objectIds: selection.objectIds,
+                    pageIndex: drag.pageIndex,
+                    strokeIds: [stroke.id],
+                    objectIds: [],
                     bounds: nextBounds
                 )
             }
-            handle.center = location
+            if let handle = overlay.shapeHandleViews.compactMap({ $0 as? PDFShapeHandleView }).first(where: { $0.strokeId == drag.strokeId && $0.handleIndex == drag.handleIndex }) {
+                handle.center = location
+            }
             updateShapeLayerPreview(stroke, in: overlay)
 
-            if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed {
+            if commit {
                 overlay.shapePreviewLayer.path = nil
                 notifyLassoSelectionChanged()
-                onStrokesChanged(selection.pageIndex, strokes(for: selection.pageIndex))
+                onStrokesChanged(drag.pageIndex, strokes(for: drag.pageIndex))
                 applyCodmesInkAnnotations()
                 applyAnnotationsToVisibleOverlays()
             }
+        }
+
+        @objc private func handleShapeHandlePan(_ gesture: UIPanGestureRecognizer) {
+            guard let handle = gesture.view as? PDFShapeHandleView,
+                  handle.superview is PDFPageAnnotationOverlay,
+                  let selection = lassoSelection,
+                  selection.strokeIds.contains(handle.strokeId),
+                  let pdfView else { return }
+
+            if gesture.state == .began,
+               let page = pdfView.document?.page(at: selection.pageIndex) {
+                removeCodmesInkAnnotation(id: handle.strokeId, from: page)
+            }
+            let drag = ShapeHandleDrag(pageIndex: selection.pageIndex, strokeId: handle.strokeId, kind: handle.kind, handleIndex: handle.handleIndex)
+            updateShapeHandleDrag(drag, to: gesture.location(in: pdfView), commit: gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed)
         }
 
         private func updateShapeStroke(_ stroke: CodmesInkStroke, kind: String, handleIndex: Int, to point: CodmesInkPoint) -> CodmesInkStroke {
