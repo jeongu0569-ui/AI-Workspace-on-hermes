@@ -92,6 +92,7 @@ struct PDFWorkspaceView: View {
 
     #if os(iOS)
     @State private var markupTool: PDFMarkupTool = .pen
+    @State private var isWritingMode = false
     @State private var toolOptions: PDFMarkupTool?
     @State private var didConfirmCurrentTool = false
     @State private var penColorHex = "#111111"
@@ -113,6 +114,7 @@ struct PDFWorkspaceView: View {
 
     #if os(macOS)
     @State private var macMarkupTool: MacPDFMarkupTool = .select
+    @State private var isMacWritingMode = false
     @State private var macSelectedObjectId: String?
     @State private var isMacInspectorPresented = false
     #endif
@@ -127,6 +129,7 @@ struct PDFWorkspaceView: View {
                 annotations: annotations,
                 focus: store.selectedPDFFocus?.path == rawFile.path ? store.selectedPDFFocus : nil,
                 tool: markupTool,
+                isWritingMode: isWritingMode,
                 penColorHex: penColorHex,
                 penWidth: penWidth,
                 eraserWidth: eraserWidth,
@@ -145,6 +148,7 @@ struct PDFWorkspaceView: View {
                 focus: store.selectedPDFFocus?.path == rawFile.path ? store.selectedPDFFocus : nil,
                 annotations: annotations,
                 tool: macMarkupTool,
+                isWritingMode: isMacWritingMode,
                 selectedObjectId: macSelectedObjectId,
                 onStrokeFinished: appendMacInkStroke(pageIndex:stroke:),
                 onStrokesChanged: replaceMacInkStrokes(pageIndex:strokes:),
@@ -277,6 +281,19 @@ struct PDFWorkspaceView: View {
             Spacer()
 
             #if os(iOS)
+            Picker("PDF mode", selection: $isWritingMode) {
+                Image(systemName: "hand.draw").tag(false)
+                Image(systemName: "pencil.tip").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 92)
+            .onChange(of: isWritingMode) { _, writing in
+                if writing, UIDevice.current.userInterfaceIdiom == .pad, markupTool == .select {
+                    markupTool = .pen
+                }
+            }
+            .accessibilityLabel("PDF mode")
+
             HStack(spacing: 4) {
                 pdfToolButton(.pen)
                 pdfToolButton(.eraser)
@@ -298,6 +315,7 @@ struct PDFWorkspaceView: View {
                 .frame(height: 18)
 
             Button {
+                isWritingMode = true
                 markupTool = .select
                 isAddingText = true
             } label: {
@@ -307,6 +325,7 @@ struct PDFWorkspaceView: View {
             .accessibilityLabel("Add text box")
 
             Button {
+                isWritingMode = true
                 markupTool = .select
                 isImportingImage = true
             } label: {
@@ -316,6 +335,7 @@ struct PDFWorkspaceView: View {
             .accessibilityLabel("Attach image")
 
             Button {
+                isWritingMode = true
                 markupTool = .select
                 isInspectorPresented = true
             } label: {
@@ -334,6 +354,7 @@ struct PDFWorkspaceView: View {
             .accessibilityLabel("Export PDF")
 
             Button {
+                isWritingMode = true
                 markupTool = .select
                 isImportingPDFPages = true
             } label: {
@@ -343,10 +364,24 @@ struct PDFWorkspaceView: View {
             .disabled(isExportingPDF)
             .accessibilityLabel("Insert PDF pages after current page")
             #elseif os(macOS)
+            Picker("PDF mode", selection: $isMacWritingMode) {
+                Image(systemName: "hand.draw").tag(false)
+                Image(systemName: "pencil.tip").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 92)
+            .onChange(of: isMacWritingMode) { _, writing in
+                if writing, macMarkupTool == .select {
+                    macMarkupTool = .pen
+                }
+            }
+            .accessibilityLabel("PDF mode")
+
             macPDFToolButton(.pen)
             macPDFToolButton(.eraser)
             macPDFToolButton(.select)
             Button {
+                isMacWritingMode = true
                 macMarkupTool = .select
                 isMacInspectorPresented = true
             } label: {
@@ -367,6 +402,7 @@ struct PDFWorkspaceView: View {
     #if os(iOS)
     private func pdfToolButton(_ tool: PDFMarkupTool) -> some View {
         Button {
+            isWritingMode = true
             if (tool == .pen || tool == .eraser), markupTool == tool, didConfirmCurrentTool {
                 toolOptions = tool
                 didConfirmCurrentTool = false
@@ -457,6 +493,7 @@ struct PDFWorkspaceView: View {
     #if os(macOS)
     private func macPDFToolButton(_ tool: MacPDFMarkupTool) -> some View {
         Button {
+            isMacWritingMode = true
             macMarkupTool = tool
         } label: {
             Image(systemName: tool.systemImage)
@@ -617,6 +654,7 @@ struct PDFWorkspaceView: View {
         updateAnnotationObject(object)
         selectedObjectId = object.id
         markupTool = .select
+        isWritingMode = true
     }
 
     private func importAnnotationImage(from url: URL) {
@@ -641,6 +679,7 @@ struct PDFWorkspaceView: View {
                     updateAnnotationObject(object)
                     selectedObjectId = object.id
                     markupTool = .select
+                    isWritingMode = true
                     statusText = "Image attached"
                 }
             } catch {
@@ -952,6 +991,7 @@ private struct MacAnnotatedPDFKitView: NSViewRepresentable {
     var focus: PDFDocumentFocus?
     var annotations: PDFAnnotationDocument?
     var tool: MacPDFMarkupTool
+    var isWritingMode: Bool
     var selectedObjectId: String?
     var onStrokeFinished: (Int, CodmesInkStroke) -> Void
     var onStrokesChanged: (Int, [CodmesInkStroke]) -> Void
@@ -970,6 +1010,7 @@ private struct MacAnnotatedPDFKitView: NSViewRepresentable {
 
     func updateNSView(_ view: CodmesMacPDFView, context: Context) {
         view.tool = tool
+        view.isWritingMode = isWritingMode
         view.annotations = annotations
         view.selectedObjectId = selectedObjectId
         view.onStrokeFinished = onStrokeFinished
@@ -990,6 +1031,7 @@ private struct MacAnnotatedPDFKitView: NSViewRepresentable {
 
 private final class CodmesMacPDFView: PDFView {
     var tool: MacPDFMarkupTool = .select
+    var isWritingMode = false
     var annotations: PDFAnnotationDocument?
     var selectedObjectId: String?
     var onStrokeFinished: ((Int, CodmesInkStroke) -> Void)?
@@ -1008,6 +1050,10 @@ private final class CodmesMacPDFView: PDFView {
     override var acceptsFirstResponder: Bool { true }
 
     override func mouseDown(with event: NSEvent) {
+        guard isWritingMode else {
+            super.mouseDown(with: event)
+            return
+        }
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
         guard let page = page(for: point, nearest: true), let document else {
@@ -1046,6 +1092,10 @@ private final class CodmesMacPDFView: PDFView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard isWritingMode else {
+            super.mouseDragged(with: event)
+            return
+        }
         let point = convert(event.locationInWindow, from: nil)
         guard let page = activePage ?? page(for: point, nearest: true) else {
             super.mouseDragged(with: event)
@@ -1067,6 +1117,10 @@ private final class CodmesMacPDFView: PDFView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard isWritingMode else {
+            super.mouseUp(with: event)
+            return
+        }
         let point = convert(event.locationInWindow, from: nil)
         switch tool {
         case .pen:
@@ -1206,17 +1260,11 @@ private final class CodmesMacPDFView: PDFView {
               let strokes = annotationPage.inkStrokes,
               !strokes.isEmpty else { return }
         let normalized = normalizedPoint(from: viewPoint, page: page)
-        let kept = strokes.filter { !stroke($0, isNear: normalized, threshold: 0.018) }
-        guard kept.count != strokes.count else { return }
+        let pageBounds = page.bounds(for: .mediaBox)
+        let threshold = max(0.004, 18.0 / Double(max(min(pageBounds.width, pageBounds.height), 1)))
+        let kept = splitStrokes(strokes, erasingAt: normalized, threshold: threshold)
+        guard kept.map(\.id) != strokes.map(\.id) || kept.count != strokes.count else { return }
         onStrokesChanged?(pageIndex, kept)
-    }
-
-    private func stroke(_ stroke: CodmesInkStroke, isNear point: CodmesInkPoint, threshold: Double) -> Bool {
-        stroke.points.contains { candidate in
-            let dx = candidate.x - point.x
-            let dy = candidate.y - point.y
-            return (dx * dx + dy * dy).squareRoot() <= threshold
-        }
     }
 
     private func normalizedPoint(from viewPoint: NSPoint, page: PDFPage) -> CodmesInkPoint {
@@ -1531,6 +1579,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
     var annotations: PDFAnnotationDocument?
     var focus: PDFDocumentFocus?
     var tool: PDFMarkupTool
+    var isWritingMode: Bool
     var penColorHex: String
     var penWidth: Double
     var eraserWidth: Double
@@ -1585,6 +1634,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         context.coordinator.annotations = annotations
         context.coordinator.focus = focus
         context.coordinator.tool = tool
+        context.coordinator.isWritingMode = isWritingMode
         context.coordinator.penColorHex = penColorHex
         context.coordinator.penWidth = penWidth
         context.coordinator.eraserWidth = eraserWidth
@@ -1613,6 +1663,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         var annotations: PDFAnnotationDocument?
         var focus: PDFDocumentFocus?
         var tool: PDFMarkupTool = .pen
+        var isWritingMode = false
         var penColorHex = "#111111"
         var penWidth = 2.5
         var eraserWidth = 18.0
@@ -1691,7 +1742,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
 
         func applyPDFNavigationMode() {
             guard let pdfView else { return }
-            let navigationEnabled = tool == .select
+            let navigationEnabled = !isWritingMode || tool == .select
             pdfView.isInMarkupMode = false
             pdfView.drawingOverlay.isHidden = navigationEnabled
             pdfView.drawingOverlay.strokeColor = UIColor(hexString: penColorHex)
@@ -1720,9 +1771,10 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         }
 
         private func applyTool(to overlay: PDFPageAnnotationOverlay) {
+            overlay.isUserInteractionEnabled = isWritingMode && tool == .select
             overlay.canvas.isUserInteractionEnabled = false
             for view in overlay.objectViews.values {
-                view.isUserInteractionEnabled = tool == .select
+                view.isUserInteractionEnabled = isWritingMode && tool == .select
             }
             applyTool(to: overlay.canvas)
         }
@@ -1824,7 +1876,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            guard tool == .pen || tool == .eraser else { return false }
+            guard isWritingMode, tool == .pen || tool == .eraser else { return false }
             if UIDevice.current.userInterfaceIdiom == .pad {
                 return touch.type == .pencil
             }
@@ -1895,18 +1947,11 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                   let strokes = annotationPage.inkStrokes,
                   !strokes.isEmpty else { return }
             let normalized = normalizedPoint(from: viewPoint, page: page)
-            let threshold = max(0.006, eraserWidth / 900)
-            let kept = strokes.filter { !stroke($0, isNear: normalized, threshold: threshold) }
-            guard kept.count != strokes.count else { return }
+            let pageBounds = page.bounds(for: .mediaBox)
+            let threshold = max(0.004, eraserWidth / Double(max(min(pageBounds.width, pageBounds.height), 1)))
+            let kept = splitStrokes(strokes, erasingAt: normalized, threshold: threshold)
+            guard kept.map(\.id) != strokes.map(\.id) || kept.count != strokes.count else { return }
             onStrokesChanged(pageIndex, kept)
-        }
-
-        private func stroke(_ stroke: CodmesInkStroke, isNear point: CodmesInkPoint, threshold: Double) -> Bool {
-            stroke.points.contains { candidate in
-                let dx = candidate.x - point.x
-                let dy = candidate.y - point.y
-                return (dx * dx + dy * dy).squareRoot() <= threshold
-            }
         }
 
         private func applyAnnotation(to canvas: PKCanvasView, pageIndex: Int) {
@@ -1952,7 +1997,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 }
                 configureObjectView(view, object: object)
                 view.frame = frame(for: object.bbox, in: overlay.bounds)
-                view.isUserInteractionEnabled = tool == .select
+                view.isUserInteractionEnabled = isWritingMode && tool == .select
                 overlay.bringSubviewToFront(view)
             }
             if let selectedObjectId, let selected = overlay.objectViews[selectedObjectId] {
@@ -2609,6 +2654,77 @@ private extension UIColor {
     }
 }
 #endif
+
+private func splitStrokes(_ strokes: [CodmesInkStroke], erasingAt point: CodmesInkPoint, threshold: Double) -> [CodmesInkStroke] {
+    strokes.flatMap { splitStroke($0, erasingAt: point, threshold: threshold) }
+}
+
+private func splitStroke(_ stroke: CodmesInkStroke, erasingAt point: CodmesInkPoint, threshold: Double) -> [CodmesInkStroke] {
+    guard stroke.points.count > 1 else { return [stroke] }
+    var segments: [[CodmesInkPoint]] = []
+    var current: [CodmesInkPoint] = []
+    let points = stroke.points
+
+    for index in points.indices {
+        let candidate = points[index]
+        let previous = index > points.startIndex ? points[points.index(before: index)] : nil
+        let next = index < points.index(before: points.endIndex) ? points[points.index(after: index)] : nil
+        let isHit = inkDistance(candidate, point) <= threshold
+            || previous.map { inkDistanceToSegment(point, $0, candidate) <= threshold } == true
+            || next.map { inkDistanceToSegment(point, candidate, $0) <= threshold } == true
+
+        if isHit {
+            if current.count > 1 {
+                segments.append(current)
+            }
+            current = []
+        } else {
+            current.append(candidate)
+        }
+    }
+
+    if current.count > 1 {
+        segments.append(current)
+    }
+
+    guard !segments.isEmpty else { return [] }
+    if segments.count == 1, segments[0].count == stroke.points.count {
+        return [stroke]
+    }
+    return segments.map { segment in
+        CodmesInkStroke(
+            id: UUID().uuidString,
+            tool: stroke.tool,
+            color: stroke.color,
+            width: stroke.width,
+            opacity: stroke.opacity,
+            points: segment
+        )
+    }
+}
+
+private func inkDistance(_ first: CodmesInkPoint, _ second: CodmesInkPoint) -> Double {
+    let dx = first.x - second.x
+    let dy = first.y - second.y
+    return (dx * dx + dy * dy).squareRoot()
+}
+
+private func inkDistanceToSegment(_ point: CodmesInkPoint, _ start: CodmesInkPoint, _ end: CodmesInkPoint) -> Double {
+    let vx = end.x - start.x
+    let vy = end.y - start.y
+    let wx = point.x - start.x
+    let wy = point.y - start.y
+    let lengthSquared = vx * vx + vy * vy
+    guard lengthSquared > 0 else { return inkDistance(point, start) }
+    let t = min(1, max(0, (wx * vx + wy * vy) / lengthSquared))
+    let projection = CodmesInkPoint(
+        x: start.x + t * vx,
+        y: start.y + t * vy,
+        pressure: nil,
+        timeOffset: nil
+    )
+    return inkDistance(point, projection)
+}
 
 private extension AnnotationBoundingBox {
     var normalizedOrSelf: NormalizedBoundingBox? {
