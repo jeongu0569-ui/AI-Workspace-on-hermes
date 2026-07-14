@@ -118,8 +118,10 @@ Remaining:
 - Add upload manager progress and retry UX.
 - Add richer provider OAuth GUI flows.
 - Add native Apple Pencil/PDF annotation UX: first iOS/iPadOS PencilKit page
-  overlay and server sync are done; text boxes, images, object editing, and PDF
-  export remain.
+  overlay, server sync, text boxes, image attachments, object move/resize,
+  text edit, long-press delete, selected-object inspector, object duplicate,
+  one-step/to-front/to-back layer ordering, and flattened PDF export/share are
+  done for the first iOS/iPadOS pass.
 
 ## Phase 5: Notes/PDF/Search
 
@@ -131,11 +133,37 @@ Status: in progress.
 - Codmes Search integration path and fallback: done.
 - External search/RAG direction documented: done.
 
+Done for first pass:
+
+- PDF annotation and Apple Pencil storage/sync for iOS/iPadOS page ink through
+  document-folder state files such as
+  `Notes/.codmes/annotations/mypage.codmes.json`.
+- Platform-neutral ink storage begins with normalized `inkStrokes` alongside
+  legacy PencilKit `inkDataBase64`.
+- iOS/iPadOS PDF annotation objects for text boxes and image attachments.
+- Text/image annotation objects can be moved, resized with pinch, edited or
+  deleted, and indexed through the Codmes Search annotation path.
+- iOS/iPadOS PDF page-range export, Codmes state export for selected pages,
+  and insertion of PDF pages plus optional Codmes state after the current page.
+- Server-side binary PDF replacement API refreshes the search index after a
+  merged PDF is saved.
+- macOS PDF preview renders shared `inkStrokes`, and the first macOS edit
+  adapter saves mouse/trackpad pen strokes, erases strokes, and selects/moves
+  or deletes text/image annotation objects through the same platform-neutral
+  annotation state.
+- macOS text/image annotation objects can be resized with a corner handle and
+  edited through the inspector. Text objects expose text and font-size editing;
+  all objects expose normalized frame controls and delete.
+
 Remaining:
 
-- PDF annotation and Apple Pencil storage/sync: first pass done for iOS/iPadOS
-  page ink through `.codmes/annotations`.
 - Server-side thumbnails and page previews.
-- PDF text box/image box annotation objects and PDF export.
+- Richer GoodNotes-style object/layer controls, shape tools, page thumbnails,
+  PDF standard annotation round-trip, and export quality hardening for unusual
+  page sizes.
+- Further macOS inspector polish, plus Windows and Android/Galaxy Tab stroke
+  render/edit adapters using the shared `inkStrokes` format.
+- Page-level PDF cache so inserted/replaced pages can be OCRed and indexed
+  without reprocessing the whole PDF.
 - Search/index status UI.
 - More polished Codmes Search setup/status UX.

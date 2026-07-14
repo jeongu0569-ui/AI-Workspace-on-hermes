@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeWorkspacePath, resolveWorkspacePath, rootPathFromKey } from "./path-utils.mjs";
+import { normalizeWorkspacePath, resolveWorkspacePath, rootPathFromKey, workspaceContentStateDir } from "./path-utils.mjs";
 
 test("normalizes workspace-relative paths", () => {
   assert.equal(normalizeWorkspacePath("Notes/Work/../Life/test.md"), "Notes/Life/test.md");
@@ -25,4 +25,11 @@ test("maps root keys to folder names", () => {
   assert.equal(rootPathFromKey("code"), "Code");
   assert.equal(rootPathFromKey("workspace"), "");
   assert.throws(() => rootPathFromKey("bad"), /Unknown workspace root/);
+});
+
+test("content-scoped state lives under the owning workspace folder", () => {
+  assert.equal(workspaceContentStateDir("/tmp/workspace", "Notes/paper.pdf"), "/tmp/workspace/Notes/.codmes");
+  assert.equal(workspaceContentStateDir("/tmp/workspace", "Documents/manual.pdf"), "/tmp/workspace/Documents/.codmes");
+  assert.equal(workspaceContentStateDir("/tmp/workspace", "Code/app/main.js"), "/tmp/workspace/Code/.codmes");
+  assert.equal(workspaceContentStateDir("/tmp/workspace", "loose.pdf"), "/tmp/workspace/.codmes");
 });

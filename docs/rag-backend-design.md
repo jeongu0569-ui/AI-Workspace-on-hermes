@@ -18,9 +18,11 @@ or use workspace scan before answering.
 
 - PDF Markdown/table extraction uses PyMuPDF4LLM from the Codmes bootstrap
   environment. PDF page/block coordinates still use PyMuPDF.
-- Scanned PDF/image text extraction is a distinct VLM/OCR extractor layer. The
-  chosen VLM provider/model is stored in Search settings, but Codmes should not
-  require tesseract, pdftoppm, Java-based ODL, LibreOffice, soffice, or paid
+- Scanned PDF/image text extraction uses a page-rendering VLM/OCR extractor
+  layer. The chosen VLM provider/model is stored in Search settings. Codmes
+  renders text-poor PDF pages to images and sends each page to the VLM with
+  temperature `0` and thinking/reasoning disabled where supported. Codmes should
+  not require tesseract, pdftoppm, Java-based ODL, LibreOffice, soffice, or paid
   cloud OCR providers for the default search path.
 - No built-in embedding model runner.
 - Native vector storage is planned but not complete.
@@ -54,10 +56,12 @@ First pass implemented:
 Planned:
 
 - More robust PDF parsing for compressed streams.
-- VLM-assisted extraction for scanned PDF pages, modeled after the KNU assistant,
-  using the provider/model selected in Settings > Search.
+- VLM-assisted extraction for scanned PDF pages and image files, modeled after
+  the KNU assistant, using the provider/model selected in Settings > Search:
+  first-pass page/image OCR blocks are implemented; stable bbox overlays remain
+  planned.
 - PDF viewer page navigation and search result highlight.
-- Free/local OCR provider design for scanned PDFs/images, without native binary requirements.
-- Selectable transparent text overlay in the Apple PDF viewer after OCR ownership is decided.
+- Selectable transparent text overlay in the Apple PDF viewer after stable OCR
+  bbox extraction is implemented.
 - Better UI for search/index status, watched roots, embedding model selection,
   and VLM OCR model selection.

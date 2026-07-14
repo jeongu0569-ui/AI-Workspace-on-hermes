@@ -60,6 +60,20 @@ Implemented:
 - markdown/text/code editing and save through `PUT /api/file`
 - PDF rendering through `GET /api/raw` and PDFKit
 - iOS/iPadOS PDF page ink through PencilKit and `GET/PUT /api/file/annotations`
+- iOS/iPadOS PDF markup tools for pen, eraser, lasso, object move/select, text
+  box insertion, image attachment, object drag, object pinch-resize, text
+  double-tap edit, and long-press delete. Ink strokes are handled through the
+  PencilKit canvas and lasso tool; text/image objects are stored as Codmes PDF
+  annotation objects with page-relative bbox metadata.
+- macOS PDF preview renders shared `inkStrokes`, and macOS edit mode can save
+  mouse/trackpad pen strokes, erase strokes, select/move text/image objects,
+  and delete selected objects with the Delete key through the same
+  platform-neutral annotation JSON.
+- iOS/iPadOS PDF export accepts an optional page range such as `1-3, 5`.
+  Range exports remap editable Codmes state to the exported page order.
+- iOS/iPadOS PDF insertion accepts a PDF plus an optional `.codmes.json` state
+  file and inserts it after the current page. Existing annotation page indexes
+  are shifted and imported annotation ids are regenerated to avoid collisions.
 - image preview through `GET /api/raw`
 - workspace search UI
 - live chat connection through the Workspace Server
@@ -198,6 +212,10 @@ Not yet implemented:
   installing on a physical iPhone/iPad.
 - iPhone/iPad runtime UX pass after trusting the local developer profile on the
   device
+- A full GoodNotes-class notebook engine is still planned. Current iOS/iPadOS
+  PDF editing covers the first native annotation pass, export/import, and basic
+  object controls; macOS has first-pass ink preview, pen input, stroke erasing,
+  object select/move/resize/delete, and an inspector for text and frame edits.
 
 ## Client API Boundary
 

@@ -53,6 +53,7 @@ struct FileBrowserPane: View {
     @State private var transferAction: WorkspaceTransferAction?
     @State private var transferDestination = ""
     @State private var isImportingFile = false
+    @State private var isImportingCodmesPDF = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -91,6 +92,16 @@ struct FileBrowserPane: View {
                 .frame(width: 30, height: 30)
                 .contentShape(Rectangle())
                 .help("Attach file")
+
+                Button {
+                    isImportingCodmesPDF = true
+                } label: {
+                    Image(systemName: "shippingbox")
+                }
+                .buttonStyle(.plain)
+                .frame(width: 30, height: 30)
+                .contentShape(Rectangle())
+                .help("Import PDF + Codmes state")
 
                 Button {
                     Task { await store.goToParent(root: root) }
@@ -178,6 +189,14 @@ struct FileBrowserPane: View {
             switch result {
             case let .success(urls):
                 Task { await store.uploadLocalFiles(root: root, fileURLs: urls) }
+            case let .failure(error):
+                store.statusMessage = error.localizedDescription
+            }
+        }
+        .fileImporter(isPresented: $isImportingCodmesPDF, allowedContentTypes: [.pdf, .json], allowsMultipleSelection: true) { result in
+            switch result {
+            case let .success(urls):
+                Task { await store.importCodmesPDFPackage(root: root, fileURLs: urls) }
             case let .failure(error):
                 store.statusMessage = error.localizedDescription
             }
@@ -695,6 +714,7 @@ private func languageForPath(_ path: String) -> String? {
 struct PDFPreviewView: NSViewRepresentable {
     let url: URL
     var focus: PDFDocumentFocus?
+    var annotations: PDFAnnotationDocument? = nil
 
     func makeNSView(context: Context) -> PDFView {
         let view = PDFView()
@@ -709,9 +729,48 @@ struct PDFPreviewView: NSViewRepresentable {
         if view.document?.documentURL != url {
             view.document = PDFDocument(url: url)
         }
+        applyCodmesInkAnnotations(to: view.document, annotations: annotations)
         if let pageNumber = focus?.page,
            let page = view.document?.page(at: max(0, pageNumber - 1)) {
             view.go(to: page)
+        }
+    }
+
+    private func applyCodmesInkAnnotations(to document: PDFDocument?, annotations: PDFAnnotationDocument?) {
+        guard let document else { return }
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index) else { continue }
+            for annotation in page.annotations where annotation.contents == "codmes-ink-preview" {
+                page.removeAnnotation(annotation)
+            }
+        }
+        guard let annotations else { return }
+        for annotationPage in annotations.pages {
+            guard let page = document.page(at: annotationPage.pageIndex),
+                  let strokes = annotationPage.inkStrokes,
+                  !strokes.isEmpty else { continue }
+            let pageBounds = page.bounds(for: .mediaBox)
+            let ink = PDFAnnotation(bounds: pageBounds, forType: .ink, withProperties: nil)
+            ink.contents = "codmes-ink-preview"
+            ink.color = .clear
+            for stroke in strokes {
+                guard stroke.points.count > 1 else { continue }
+                let path = NSBezierPath()
+                let first = stroke.points[0]
+                path.move(to: NSPoint(
+                    x: pageBounds.minX + pageBounds.width * first.x,
+                    y: pageBounds.minY + pageBounds.height * (1 - first.y)
+                ))
+                for point in stroke.points.dropFirst() {
+                    path.line(to: NSPoint(
+                        x: pageBounds.minX + pageBounds.width * point.x,
+                        y: pageBounds.minY + pageBounds.height * (1 - point.y)
+                    ))
+                }
+                path.lineWidth = max(0.5, stroke.width)
+                ink.add(path)
+            }
+            page.addAnnotation(ink)
         }
     }
 }

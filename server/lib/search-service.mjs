@@ -2,7 +2,11 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileKind, resolveWorkspacePath } from "./path-utils.mjs";
-import { extractAndCacheDocument, isDocumentIngestFile } from "./document-ingest.mjs";
+import {
+  extractAndCacheDocument,
+  extractDocumentAnnotationBlocks,
+  isDocumentIngestFile
+} from "./document-ingest.mjs";
 
 const DEFAULT_MAX_RESULTS = 20;
 const DEFAULT_MAX_SCAN_FILES = 1000;
@@ -412,7 +416,7 @@ async function listSearchableFiles(workspaceRoot, relativePath, options) {
 function shouldSkipDirectoryEntry(workspaceRoot, parentAbsolutePath, entryName) {
   if (entryName === ".git" || entryName === "node_modules") return true;
   const parentRel = path.relative(workspaceRoot, parentAbsolutePath).replace(/\\/g, "/");
-  if (!parentRel && entryName === ".codmes") return true;
+  if (entryName === ".codmes") return true;
   return false;
 }
 
@@ -464,7 +468,18 @@ function filterCandidates(candidates, request) {
 
 async function readSearchableDocument(workspaceRoot, file) {
   if (isDocumentIngestFile(file.path)) {
-    return await extractAndCacheDocument(workspaceRoot, file.absolutePath, file.path);
+    const document = await extractAndCacheDocument(workspaceRoot, file.absolutePath, file.path);
+    const annotationBlocks = await extractDocumentAnnotationBlocks(workspaceRoot, file.path).catch(() => []);
+    if (!annotationBlocks.length) return document;
+    const text = [document.text, annotationBlocks.map((block) => block.text).join("\n\n")]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+    return {
+      ...document,
+      text,
+      blocks: [...(document.blocks || []), ...annotationBlocks]
+    };
   }
   const text = await fs.readFile(file.absolutePath, "utf8");
   return {
@@ -495,6 +510,7 @@ function parseDate(value) {
 }
 
 function isSearchableTextFile(relativePath) {
+  if (String(relativePath || "").toLowerCase().endsWith(".codmes.json")) return false;
   const ext = path.extname(relativePath).toLowerCase();
   if (SEARCHABLE_EXTENSIONS.has(ext)) return true;
   return SEARCHABLE_KINDS.has(fileKind(relativePath));

@@ -116,6 +116,23 @@ struct WorkspaceAPI {
         let _: EmptyResponse = try await post("/api/file/upload", body: body)
     }
 
+    func replaceBinaryFile(path: String, data: Data) async throws {
+        let body = [
+            "path": path,
+            "dataBase64": data.base64EncodedString()
+        ]
+        let components = try components("/api/file/binary")
+        let _: EmptyResponse = try await request(components, method: "PUT", body: body)
+    }
+
+    func importCodmesPDF(path: String, pdfData: Data, codmesData: Data?) async throws -> CodmesPDFImportResponse {
+        try await post("/api/file/import-codmes-pdf", body: CodmesPDFImportBody(
+            path: path,
+            pdfDataBase64: pdfData.base64EncodedString(),
+            codmesDataBase64: codmesData?.base64EncodedString()
+        ))
+    }
+
     func startChunkedUpload(path: String, size: Int64) async throws -> UploadStartResponse {
         try await post("/api/file/upload/start", body: ChunkedUploadStartBody(path: path, size: size))
     }
@@ -505,6 +522,20 @@ struct WorkspaceAPI {
 }
 
 struct EmptyResponse: Codable {}
+
+struct CodmesPDFImportResponse: Codable {
+    let ok: Bool
+    let path: String
+    let requestedPath: String
+    let renamed: Bool
+    let annotationsImported: Bool
+}
+
+private struct CodmesPDFImportBody: Encodable {
+    let path: String
+    let pdfDataBase64: String
+    let codmesDataBase64: String?
+}
 
 private struct ChunkedUploadStartBody: Encodable {
     let path: String

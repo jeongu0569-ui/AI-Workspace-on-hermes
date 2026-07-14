@@ -810,6 +810,42 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
+    func importCodmesPDFPackage(root: String, fileURLs: [URL]) async {
+        guard let api else { return }
+        let scoped = fileURLs.map { url in
+            (url, url.startAccessingSecurityScopedResource())
+        }
+        defer {
+            for (url, didAccess) in scoped where didAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        guard let pdfURL = fileURLs.first(where: { $0.pathExtension.lowercased() == "pdf" }) else {
+            statusMessage = "Select a PDF file."
+            return
+        }
+        let stateURL = fileURLs.first(where: { $0.lastPathComponent.lowercased().hasSuffix(".codmes.json") })
+        let destination = workspacePathForNewItem(root: root, name: pdfURL.lastPathComponent)
+        let uploadId = UUID()
+        addUploadItem(id: uploadId, root: root, fileURL: pdfURL, destination: destination)
+        do {
+            updateUploadItem(uploadId, status: .reading, progress: 0.1, message: "Reading Codmes package")
+            let pdfData = try Data(contentsOf: pdfURL)
+            let stateData = try stateURL.map { try Data(contentsOf: $0) }
+            updateUploadItem(uploadId, status: .uploading, progress: 0.45, bytesSent: Int64(pdfData.count), totalBytes: Int64(pdfData.count), message: "Importing")
+            let response = try await api.importCodmesPDF(path: destination, pdfData: pdfData, codmesData: stateData)
+            updateUploadItem(uploadId, status: .completed, progress: 1, bytesSent: Int64(pdfData.count), totalBytes: Int64(pdfData.count), message: response.renamed ? "Imported as \(response.path)" : "Imported")
+            await loadTree(root: root, path: currentPath(for: root))
+            if let item = items(for: root).first(where: { $0.path == response.path }) {
+                await loadFile(item)
+            }
+            statusMessage = response.annotationsImported ? "Imported PDF with Codmes state" : "Imported PDF"
+        } catch {
+            updateUploadItem(uploadId, status: .failed, message: uploadErrorMessage(error))
+            statusMessage = error.localizedDescription
+        }
+    }
+
     func clearFinishedUploads(root: String? = nil) {
         uploadItems.removeAll {
             (root == nil || $0.root == root) && !$0.isActive

@@ -12,6 +12,7 @@ import {
   searchWorkspace,
   updateSearchIndex
 } from "./search-service.mjs";
+import { annotationsPathForDocument } from "./document-ingest.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -139,11 +140,15 @@ test("full workspace indexing skips private Codmes config state", async () => {
   const root = await fixtureWorkspace();
   await fs.mkdir(path.join(root, ".codmes", "config"), { recursive: true });
   await fs.writeFile(path.join(root, ".codmes", "config", "auth.json"), "{\"secret\":\"leak-marker\"}", "utf8");
+  await fs.mkdir(path.join(root, "Documents", ".codmes", "annotations"), { recursive: true });
+  await fs.writeFile(path.join(root, "Documents", ".codmes", "annotations", "manual.codmes.json"), "{\"secret\":\"annotation-state-leak-marker\"}", "utf8");
 
   await buildSearchIndex(root, { roots: [""] });
   const result = await searchWorkspace(root, { query: "leak-marker", scopePath: "" });
   assert.equal(result.provider, "codmes-search-index");
   assert.equal(result.resultCount, 0);
+  const annotationStateResult = await searchWorkspace(root, { query: "annotation-state-leak-marker", scopePath: "Documents" });
+  assert.equal(annotationStateResult.resultCount, 0);
 });
 
 test("searches extracted PDF text and caches it", async () => {
@@ -161,6 +166,49 @@ test("searches extracted PDF text and caches it", async () => {
 
   const cacheEntries = await fs.readdir(path.join(root, ".codmes", "index", "documents"));
   assert.equal(cacheEntries.length, 1);
+});
+
+test("indexes searchable PDF annotation text and image OCR blocks", async () => {
+  const root = await fixtureWorkspace();
+  await fs.mkdir(path.join(root, "Documents"), { recursive: true });
+  await fs.mkdir(path.join(root, ".codmes", "config"), { recursive: true });
+  await fs.writeFile(path.join(root, ".codmes", "config", "search.env"), [
+    "VLM_PROVIDER=lmstudio",
+    "VLM_MODEL=vision-model",
+    "VLM_BASE_URL=http://vlm.test/v1",
+    "VLM_MIN_TEXT_CHARS=0",
+    ""
+  ].join("\n"), "utf8");
+  const pdfPath = path.join(root, "Documents", "annotated.pdf");
+  await createMinimalPdf(pdfPath, "base pdf text");
+  await fs.mkdir(path.dirname(annotationsPathForDocument(root, "Documents/annotated.pdf")), { recursive: true });
+  await fs.writeFile(annotationsPathForDocument(root, "Documents/annotated.pdf"), JSON.stringify({
+    schemaVersion: 1,
+    documentPath: "Documents/annotated.pdf",
+    pages: [{
+      pageIndex: 0,
+      objects: [
+        { id: "box-1", type: "text", text: "회의 액션 아이템", bbox: { x: 0.1, y: 0.1, width: 0.4, height: 0.1 } },
+        { id: "img-1", type: "image", dataBase64: MINIMAL_PNG_BASE64, metadata: { mime: "image/png" } }
+      ]
+    }],
+    objects: []
+  }), "utf8");
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    choices: [{ message: { content: "첨부 도표 OCR" } }]
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  try {
+    await buildSearchIndex(root, { roots: ["Documents"] });
+    const textBox = await searchWorkspace(root, { query: "액션 아이템", scopePath: "Documents" });
+    assert.equal(textBox.results.some((result) => result.source === "annotation-text"), true);
+
+    const imageOcr = await searchWorkspace(root, { query: "첨부 도표", scopePath: "Documents" });
+    assert.equal(imageOcr.results.some((result) => result.source === "annotation-image-ocr"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 async function fixtureWorkspace() {
@@ -183,3 +231,5 @@ doc.save(path)
 `;
   await execFileAsync(process.env.CODMES_PYTHON || ".codmes-runtime/bin/python", ["-c", script, filePath, text]);
 }
+
+const MINIMAL_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR42mP8z8BQDwAFgwJ/lxWvWQAAAABJRU5ErkJggg==";

@@ -24,6 +24,11 @@ import { buildWorkspaceContext } from "./lib/context-router.mjs";
 import { buildIndex, readFileMetadata, readIndex } from "./lib/file-index.mjs";
 import { renderCodeDocument, renderMarkdownDocument } from "./lib/render-service.mjs";
 import { buildSearchIndex, searchStatus, searchWorkspace, updateSearchIndex } from "./lib/search-service.mjs";
+import {
+  annotationsPathForDocument,
+  contentScopedAnnotationsPathForDocument,
+  legacyAnnotationsPathForDocument
+} from "./lib/document-ingest.mjs";
 import { readAuditSummary } from "./lib/runtime/audit-log.mjs";
 import {
   BUILTIN_PROVIDERS,
@@ -59,6 +64,7 @@ const SERVER_TOKEN = process.env.CODMES_SERVER_TOKEN || "";
 const searchWatchers = [];
 const pendingSearchUpdates = new Set();
 let searchUpdateTimer = null;
+let searchIndexUpdateChain = Promise.resolve();
 
 const TEXT_FILE_LIMIT = 5 * 1024 * 1024;
 
@@ -219,7 +225,6 @@ async function ensureWorkspace() {
   await fs.mkdir(path.join(WORKSPACE_ROOT, WORKSPACE_DIRS.code), { recursive: true });
   await fs.mkdir(path.join(WORKSPACE_ROOT, WORKSPACE_DIRS.documents), { recursive: true });
   await fs.mkdir(path.join(WORKSPACE_ROOT, WORKSPACE_DIRS.attachments), { recursive: true });
-  await fs.mkdir(path.join(WORKSPACE_ROOT, ".codmes", "annotations"), { recursive: true });
   await writeJsonIfMissing(path.join(WORKSPACE_ROOT, ".codmes", "metadata.json"), {
     schemaVersion: 1,
     workspaceRoot: WORKSPACE_ROOT,
@@ -286,6 +291,12 @@ async function handleRequest(req, res) {
     }
     if (req.method === "POST" && url.pathname === "/api/file/upload") {
       return sendJson(res, await uploadFile(req), 201);
+    }
+    if (req.method === "PUT" && url.pathname === "/api/file/binary") {
+      return sendJson(res, await replaceBinaryFile(req));
+    }
+    if (req.method === "POST" && url.pathname === "/api/file/import-codmes-pdf") {
+      return sendJson(res, await importCodmesPdf(req), 201);
     }
     if (req.method === "POST" && url.pathname === "/api/file/upload/start") {
       return sendJson(res, await startChunkedUpload(req), 201);
@@ -870,6 +881,7 @@ async function writeTextFile(req, url) {
   const { relativePath, absolutePath } = resolveWorkspacePath(WORKSPACE_ROOT, filePath);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   await fs.writeFile(absolutePath, content, "utf8");
+  await refreshSearchIndexPaths([relativePath]);
   return { ok: true, path: relativePath };
 }
 
@@ -880,6 +892,7 @@ async function createFile(req) {
   const { relativePath, absolutePath } = resolveWorkspacePath(WORKSPACE_ROOT, filePath);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   await fs.writeFile(absolutePath, typeof body.content === "string" ? body.content : "", { flag: "wx" });
+  await refreshSearchIndexPaths([relativePath]);
   return { ok: true, path: relativePath };
 }
 
@@ -888,6 +901,7 @@ async function createFolder(req) {
   if (!body.path) throw Object.assign(new Error("Missing folder path."), { status: 400 });
   const { relativePath, absolutePath } = resolveWorkspacePath(WORKSPACE_ROOT, body.path);
   await fs.mkdir(absolutePath, { recursive: true });
+  await refreshSearchIndexPaths([relativePath]);
   return { ok: true, path: relativePath };
 }
 
@@ -896,8 +910,11 @@ async function movePath(req) {
   if (!body.from || !body.to) throw Object.assign(new Error("Missing from or to path."), { status: 400 });
   const from = resolveWorkspacePath(WORKSPACE_ROOT, body.from);
   const to = resolveWorkspacePath(WORKSPACE_ROOT, body.to);
+  const movedDocuments = await collectDocumentStateTransitions(from.relativePath, to.relativePath);
   await fs.mkdir(path.dirname(to.absolutePath), { recursive: true });
   await fs.rename(from.absolutePath, to.absolutePath);
+  await transferDocumentStateFiles(movedDocuments, { mode: "move" });
+  await refreshSearchIndexPaths([from.relativePath, to.relativePath]);
   return { ok: true, from: from.relativePath, to: to.relativePath };
 }
 
@@ -906,12 +923,15 @@ async function copyPath(req) {
   if (!body.from || !body.to) throw Object.assign(new Error("Missing from or to path."), { status: 400 });
   const from = resolveWorkspacePath(WORKSPACE_ROOT, body.from);
   const to = resolveWorkspacePath(WORKSPACE_ROOT, body.to);
+  const copiedDocuments = await collectDocumentStateTransitions(from.relativePath, to.relativePath);
   await fs.mkdir(path.dirname(to.absolutePath), { recursive: true });
   await fs.cp(from.absolutePath, to.absolutePath, {
     recursive: true,
     errorOnExist: true,
     force: false
   });
+  await transferDocumentStateFiles(copiedDocuments, { mode: "copy" });
+  await refreshSearchIndexPaths([to.relativePath]);
   return { ok: true, from: from.relativePath, to: to.relativePath };
 }
 
@@ -925,7 +945,52 @@ async function uploadFile(req) {
   await assertPathAvailable(absolutePath);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   await fs.writeFile(absolutePath, Buffer.from(body.dataBase64, "base64"), { flag: "wx" });
+  await refreshSearchIndexPaths([relativePath]);
   return { ok: true, path: relativePath };
+}
+
+async function replaceBinaryFile(req) {
+  const body = await readJsonBody(req);
+  if (!body.path) throw Object.assign(new Error("Missing file path."), { status: 400 });
+  if (typeof body.dataBase64 !== "string") {
+    throw Object.assign(new Error("Missing file data."), { status: 400 });
+  }
+  const { relativePath, absolutePath } = resolveWorkspacePath(WORKSPACE_ROOT, body.path);
+  const stat = await fs.stat(absolutePath);
+  if (stat.isDirectory()) throw Object.assign(new Error("Cannot replace a folder."), { status: 400 });
+  await fs.writeFile(absolutePath, Buffer.from(body.dataBase64, "base64"));
+  await refreshSearchIndexPaths([relativePath]);
+  return { ok: true, path: relativePath };
+}
+
+async function importCodmesPdf(req) {
+  const body = await readJsonBody(req);
+  if (!body.path) throw Object.assign(new Error("Missing PDF path."), { status: 400 });
+  if (typeof body.pdfDataBase64 !== "string") {
+    throw Object.assign(new Error("Missing PDF data."), { status: 400 });
+  }
+  const requested = resolveWorkspacePath(WORKSPACE_ROOT, body.path);
+  const target = await availableWorkspaceFilePath(requested.relativePath);
+  await fs.mkdir(path.dirname(target.absolutePath), { recursive: true });
+  await fs.writeFile(target.absolutePath, Buffer.from(body.pdfDataBase64, "base64"), { flag: "wx" });
+
+  let annotations = null;
+  if (typeof body.codmesDataBase64 === "string" && body.codmesDataBase64.trim()) {
+    const raw = Buffer.from(body.codmesDataBase64, "base64").toString("utf8");
+    annotations = normalizeAnnotations(target.relativePath, JSON.parse(raw));
+    const targetAnnotationPath = annotationsPathForDocument(WORKSPACE_ROOT, target.relativePath);
+    await fs.mkdir(path.dirname(targetAnnotationPath), { recursive: true });
+    await fs.writeFile(targetAnnotationPath, JSON.stringify(annotations, null, 2) + "\n", "utf8");
+  }
+
+  await refreshSearchIndexPaths([target.relativePath]);
+  return {
+    ok: true,
+    path: target.relativePath,
+    requestedPath: requested.relativePath,
+    renamed: target.relativePath !== requested.relativePath,
+    annotationsImported: Boolean(annotations)
+  };
 }
 
 async function startChunkedUpload(req) {
@@ -993,6 +1058,7 @@ async function completeChunkedUpload(req) {
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   await fs.copyFile(uploadTempPath(uploadId), absolutePath, fsConstants.COPYFILE_EXCL);
   await cleanupUpload(uploadId);
+  await refreshSearchIndexPaths([relativePath]);
   return { ok: true, uploadId, path: relativePath };
 }
 
@@ -1006,7 +1072,10 @@ async function cancelChunkedUpload(req) {
 async function deletePath(url) {
   const filePath = requireQuery(url, "path");
   const { relativePath, absolutePath } = resolveWorkspacePath(WORKSPACE_ROOT, filePath);
+  const deletedDocuments = await collectDocumentPathsForState(relativePath);
   await fs.rm(absolutePath, { recursive: true, force: false });
+  await removeDocumentStateFiles(deletedDocuments);
+  await refreshSearchIndexPaths([relativePath]);
   return { ok: true, path: relativePath };
 }
 
@@ -1024,8 +1093,26 @@ async function readFileAnnotations(url) {
     return JSON.parse(await fs.readFile(annotationsPath(relativePath), "utf8"));
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
+    const migrated = await migrateLegacyAnnotations(relativePath);
+    if (migrated) return migrated;
     return emptyAnnotations(relativePath);
   }
+}
+
+async function availableWorkspaceFilePath(relativePath) {
+  const normalized = String(relativePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  const parsed = path.posix.parse(normalized);
+  const directory = parsed.dir;
+  const extension = parsed.ext || "";
+  const baseName = parsed.name || "document";
+  for (let index = 0; index < 1000; index += 1) {
+    const candidateName = index === 0 ? `${baseName}${extension}` : `${baseName} ${index + 1}${extension}`;
+    const candidatePath = directory ? `${directory}/${candidateName}` : candidateName;
+    const resolved = resolveWorkspacePath(WORKSPACE_ROOT, candidatePath);
+    const exists = await fs.stat(resolved.absolutePath).then(() => true, () => false);
+    if (!exists) return resolved;
+  }
+  throw Object.assign(new Error(`Could not find available file name for ${relativePath}.`), { status: 409 });
 }
 
 async function writeFileAnnotations(req, url) {
@@ -1035,14 +1122,127 @@ async function writeFileAnnotations(req, url) {
   if (stat.isDirectory()) throw Object.assign(new Error("Cannot annotate a folder."), { status: 400 });
   const body = await readJsonBody(req);
   const annotations = normalizeAnnotations(relativePath, body);
-  await fs.mkdir(path.dirname(annotationsPath(relativePath)), { recursive: true });
-  await fs.writeFile(annotationsPath(relativePath), JSON.stringify(annotations, null, 2) + "\n", "utf8");
+  const targetPath = annotationsPath(relativePath);
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, JSON.stringify(annotations, null, 2) + "\n", "utf8");
+  await refreshSearchIndexPaths([relativePath]);
   return annotations;
 }
 
 function annotationsPath(relativePath) {
-  const encoded = Buffer.from(relativePath, "utf8").toString("base64url");
-  return path.join(WORKSPACE_ROOT, ".codmes", "annotations", `${encoded}.json`);
+  return annotationsPathForDocument(WORKSPACE_ROOT, relativePath);
+}
+
+async function collectDocumentStateTransitions(fromRelativePath, toRelativePath) {
+  const fromPaths = await collectDocumentPathsForState(fromRelativePath);
+  if (!fromPaths.length) return [];
+  const fromPrefix = String(fromRelativePath || "").replace(/\\/g, "/").replace(/\/+$/g, "");
+  const toPrefix = String(toRelativePath || "").replace(/\\/g, "/").replace(/\/+$/g, "");
+  return fromPaths.map((fromPath) => {
+    const suffix = fromPath === fromPrefix ? "" : fromPath.slice(fromPrefix.length).replace(/^\/+/, "");
+    return {
+      from: fromPath,
+      to: suffix ? `${toPrefix}/${suffix}` : toPrefix
+    };
+  });
+}
+
+async function collectDocumentPathsForState(relativePath) {
+  const resolved = resolveWorkspacePath(WORKSPACE_ROOT, relativePath);
+  const stat = await fs.stat(resolved.absolutePath).catch(() => null);
+  if (!stat) return [];
+  if (!stat.isDirectory()) return [resolved.relativePath];
+  const paths = [];
+  await collectFilesUnderDirectory(resolved.absolutePath, resolved.relativePath, paths);
+  return paths;
+}
+
+async function collectFilesUnderDirectory(absoluteDir, relativeDir, paths) {
+  const entries = await fs.readdir(absoluteDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === ".codmes") continue;
+    const childAbsolute = path.join(absoluteDir, entry.name);
+    const childRelative = joinWorkspacePath(relativeDir, entry.name);
+    if (entry.isDirectory()) {
+      await collectFilesUnderDirectory(childAbsolute, childRelative, paths);
+    } else if (entry.isFile()) {
+      paths.push(childRelative);
+    }
+  }
+}
+
+async function transferDocumentStateFiles(transitions, { mode }) {
+  for (const transition of transitions) {
+    const targetPath = annotationsPathForDocument(WORKSPACE_ROOT, transition.to);
+    const sourcePath = await existingAnnotationStatePath(transition.from);
+    const movedTargetPath = await existingAnnotationStatePath(transition.to);
+    const readablePath = sourcePath || movedTargetPath;
+    if (!readablePath) continue;
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    const raw = await fs.readFile(readablePath, "utf8");
+    let output = raw;
+    try {
+      const parsed = JSON.parse(raw);
+      parsed.documentPath = transition.to;
+      parsed.updatedAt = parsed.updatedAt || new Date().toISOString();
+      output = JSON.stringify(parsed, null, 2) + "\n";
+    } catch {}
+    if (mode === "copy") {
+      await fs.writeFile(targetPath, output);
+    } else {
+      await fs.writeFile(targetPath, output);
+      await removeAnnotationStateForPath(transition.from);
+    }
+  }
+}
+
+async function removeDocumentStateFiles(relativePaths) {
+  for (const relativePath of relativePaths) {
+    await removeAnnotationStateForPath(relativePath);
+  }
+}
+
+async function existingAnnotationStatePath(relativePath) {
+  for (const candidate of [
+    annotationsPathForDocument(WORKSPACE_ROOT, relativePath),
+    contentScopedAnnotationsPathForDocument(WORKSPACE_ROOT, relativePath),
+    legacyAnnotationsPathForDocument(WORKSPACE_ROOT, relativePath)
+  ]) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {}
+  }
+  return null;
+}
+
+async function removeAnnotationStateForPath(relativePath) {
+  await Promise.all([
+    fs.rm(annotationsPathForDocument(WORKSPACE_ROOT, relativePath), { force: true }),
+    fs.rm(contentScopedAnnotationsPathForDocument(WORKSPACE_ROOT, relativePath), { force: true }),
+    fs.rm(legacyAnnotationsPathForDocument(WORKSPACE_ROOT, relativePath), { force: true })
+  ]);
+}
+
+async function migrateLegacyAnnotations(relativePath) {
+  const targetPath = annotationsPathForDocument(WORKSPACE_ROOT, relativePath);
+  for (const legacyPath of [
+    contentScopedAnnotationsPathForDocument(WORKSPACE_ROOT, relativePath),
+    legacyAnnotationsPathForDocument(WORKSPACE_ROOT, relativePath)
+  ]) {
+    if (legacyPath === targetPath) continue;
+    try {
+      const raw = await fs.readFile(legacyPath, "utf8");
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, raw, { flag: "wx" }).catch((error) => {
+        if (error?.code !== "EEXIST") throw error;
+      });
+      return JSON.parse(raw);
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  return null;
 }
 
 function emptyAnnotations(relativePath) {
@@ -1365,16 +1565,40 @@ async function restartSearchWatchers() {
 function queueSearchIndexUpdate(relativePath) {
   const clean = String(relativePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
   if (!clean || clean.startsWith(".codmes/index/")) return;
-  pendingSearchUpdates.add(clean);
+  pendingSearchUpdates.add(documentPathForAnnotationStatePath(clean) || clean);
   clearTimeout(searchUpdateTimer);
   searchUpdateTimer = setTimeout(async () => {
     const changed = Array.from(pendingSearchUpdates);
     pendingSearchUpdates.clear();
-    const config = await readSearchConfig().catch(() => null);
-    await updateSearchIndex(WORKSPACE_ROOT, changed, searchIndexOptions(config || {})).catch((error) => {
-      console.warn(`[codmes] search partial index update failed: ${error?.message || error}`);
-    });
+    await refreshSearchIndexPaths(changed);
   }, 750);
+}
+
+async function refreshSearchIndexPaths(pathsToRefresh) {
+  const paths = Array.from(new Set([].concat(pathsToRefresh || [])
+    .map((item) => String(item || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""))
+    .filter((item) => item && !item.startsWith(".codmes/"))));
+  if (!paths.length) return null;
+  const run = async () => {
+    const config = await readSearchConfig().catch(() => null);
+    return await updateSearchIndex(WORKSPACE_ROOT, paths, searchIndexOptions(config || {}));
+  };
+  const next = searchIndexUpdateChain.then(run, run).catch((error) => {
+    console.warn(`[codmes] search partial index update failed: ${error?.message || error}`);
+    return null;
+  });
+  searchIndexUpdateChain = next.then(() => undefined, () => undefined);
+  return await next;
+}
+
+function documentPathForAnnotationStatePath(relativePath) {
+  const clean = String(relativePath || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const marker = "/.codmes/annotations/";
+  const markerIndex = clean.indexOf(marker);
+  if (markerIndex < 0 || !clean.toLowerCase().endsWith(".codmes.json")) return null;
+  const parent = clean.slice(0, markerIndex);
+  const stateName = path.posix.basename(clean).replace(/\.codmes\.json$/i, ".pdf");
+  return parent ? `${parent}/${stateName}` : stateName;
 }
 
 function defaultSearchIncludeGlobs() {

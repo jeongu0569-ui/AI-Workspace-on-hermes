@@ -114,7 +114,8 @@ Phase 2 uses a GoodNotes-style structure with a thin first feature set:
 2. Store file metadata in `.codmes/index/files.json`.
 3. Add PDF/Office/HWP/Excel text extraction where possible.
 4. Add extracted text blocks to the search layer.
-5. Store server-owned annotation layers in `.codmes/annotations`.
+5. Store server-owned annotation layers in a hidden state folder inside the
+   document folder, such as `Notes/.codmes/annotations/mypage.codmes.json`.
 6. Add iOS/iPadOS page-level PencilKit ink overlays through PDFKit.
 7. Add page/coordinate-aware PDF search result highlights for text-layer blocks.
 
@@ -125,11 +126,31 @@ state.
 Current annotation state:
 
 ```text
-.codmes/annotations/<base64url-workspace-path>.json
+Notes/mypage.pdf
+Notes/.codmes/annotations/mypage.codmes.json
 ```
 
-The current Apple implementation saves PencilKit ink per PDF page. The schema
-also leaves room for later `highlight`, `textBox`, and `imageBox` objects.
+The current Apple implementation saves PencilKit ink per PDF page and stores
+text/image annotation objects with page-relative bbox metadata. This lets a
+user move or copy a document folder and keep editable Codmes state with it
+without showing JSON files next to every PDF, while global sessions,
+credentials, and approvals remain in the workspace root `.codmes`.
+
+The first page-level document operation pass supports iOS/iPadOS page range
+export and PDF insertion. Range export remaps Codmes annotation pages to the
+new exported page order. Insertion merges the selected PDF after the current
+page, shifts existing annotation page indexes, optionally imports a matching
+`.codmes.json` state file, and asks the server to refresh the changed PDF in the
+search index. True page-level OCR/embedding invalidation is still planned.
+
+Ink storage must remain platform-neutral. PencilKit is treated as the current
+iOS/iPadOS input adapter, not the long-term storage format. Codmes annotation
+state now stores legacy `inkDataBase64` for current Apple rendering and also
+stores normalized `inkStrokes` with points, pressure, color, width, and timing.
+macOS now has a first direct `inkStrokes` render/edit adapter for preview, pen
+input, stroke erasing, and text/image object select/move/delete. Future Windows
+and Android/Galaxy Tab clients should render and edit the same common
+`inkStrokes` and annotation object format directly.
 
 ## RAG Direction
 

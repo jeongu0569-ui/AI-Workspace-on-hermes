@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { annotationsPathForDocument } from "./lib/document-ingest.mjs";
 
 test("workspace server protects APIs with CODMES_SERVER_TOKEN and exposes management APIs", async () => {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codmes-server-api-"));
@@ -58,6 +59,18 @@ test("workspace server protects APIs with CODMES_SERVER_TOKEN and exposes manage
           {
             pageIndex: 0,
             inkDataBase64: "cGVuLWRhdGE=",
+            inkStrokes: [
+              {
+                id: "stroke-1",
+                tool: "pen",
+                color: "#111111",
+                width: 2.5,
+                points: [
+                  { x: 0.1, y: 0.2, pressure: 0.5, timeOffset: 0 },
+                  { x: 0.2, y: 0.25, pressure: 0.6, timeOffset: 0.01 }
+                ]
+              }
+            ],
             objects: [
               { id: "highlight-1", type: "highlight", bbox: { x: 0.1, y: 0.2, width: 0.3, height: 0.04 } }
             ]
@@ -69,6 +82,120 @@ test("workspace server protects APIs with CODMES_SERVER_TOKEN and exposes manage
     assert.equal(savedAnnotations.pages[0].pageIndex, 0);
     const readAnnotations = await fetchJson(`${baseUrl}/api/file/annotations?path=Documents/sample.pdf`, { token });
     assert.equal(readAnnotations.pages[0].inkDataBase64, "cGVuLWRhdGE=");
+    assert.equal(readAnnotations.pages[0].inkStrokes[0].points[1].x, 0.2);
+    await fs.access(annotationsPathForDocument(workspaceRoot, "Documents/sample.pdf"));
+    assert.equal(
+      annotationsPathForDocument(workspaceRoot, "Documents/sample.pdf"),
+      path.join(workspaceRoot, "Documents", ".codmes", "annotations", "sample.codmes.json")
+    );
+
+    const movedPdf = await fetchJson(`${baseUrl}/api/file/move`, {
+      token,
+      method: "PATCH",
+      body: { from: "Documents/sample.pdf", to: "Documents/renamed.pdf" }
+    });
+    assert.equal(movedPdf.to, "Documents/renamed.pdf");
+    const movedAnnotations = await fetchJson(`${baseUrl}/api/file/annotations?path=Documents/renamed.pdf`, { token });
+    assert.equal(movedAnnotations.documentPath, "Documents/renamed.pdf");
+    assert.equal(movedAnnotations.pages[0].inkDataBase64, "cGVuLWRhdGE=");
+    await fs.access(annotationsPathForDocument(workspaceRoot, "Documents/renamed.pdf"));
+    await assert.rejects(
+      fs.access(annotationsPathForDocument(workspaceRoot, "Documents/sample.pdf")),
+      { code: "ENOENT" }
+    );
+
+    const copiedPdf = await fetchJson(`${baseUrl}/api/file/copy`, {
+      token,
+      method: "POST",
+      body: { from: "Documents/renamed.pdf", to: "Documents/copied.pdf" }
+    });
+    assert.equal(copiedPdf.to, "Documents/copied.pdf");
+    const copiedAnnotations = await fetchJson(`${baseUrl}/api/file/annotations?path=Documents/copied.pdf`, { token });
+    assert.equal(copiedAnnotations.documentPath, "Documents/copied.pdf");
+    assert.equal(copiedAnnotations.pages[0].inkDataBase64, "cGVuLWRhdGE=");
+
+    const deletedCopy = await fetchJson(`${baseUrl}/api/file?path=Documents/copied.pdf`, {
+      token,
+      method: "DELETE"
+    });
+    assert.equal(deletedCopy.path, "Documents/copied.pdf");
+    await assert.rejects(
+      fs.access(annotationsPathForDocument(workspaceRoot, "Documents/copied.pdf")),
+      { code: "ENOENT" }
+    );
+
+    await fs.writeFile(path.join(workspaceRoot, "Documents", "imported.pdf"), "%PDF-1.4\nexisting\n%%EOF", "utf8");
+    const imported = await fetchJson(`${baseUrl}/api/file/import-codmes-pdf`, {
+      token,
+      method: "POST",
+      body: {
+        path: "Documents/imported.pdf",
+        pdfDataBase64: Buffer.from("%PDF-1.4\nimported\n%%EOF", "utf8").toString("base64"),
+        codmesDataBase64: Buffer.from(JSON.stringify({
+          schemaVersion: 1,
+          documentPath: "Portable/old.pdf",
+          pages: [{
+            pageIndex: 0,
+            objects: [{ id: "portable-text", type: "text", text: "portable import marker" }]
+          }],
+          objects: []
+        }), "utf8").toString("base64")
+      }
+    });
+    assert.equal(imported.requestedPath, "Documents/imported.pdf");
+    assert.equal(imported.path, "Documents/imported 2.pdf");
+    assert.equal(imported.renamed, true);
+    assert.equal(imported.annotationsImported, true);
+    const importedAnnotations = await fetchJson(`${baseUrl}/api/file/annotations?path=Documents/imported%202.pdf`, { token });
+    assert.equal(importedAnnotations.documentPath, "Documents/imported 2.pdf");
+    assert.equal(importedAnnotations.pages[0].objects[0].text, "portable import marker");
+
+    await fs.mkdir(path.join(workspaceRoot, "Documents", ".codmes", "annotations"), { recursive: true });
+    await fs.writeFile(path.join(workspaceRoot, "Documents", ".codmes", "annotations", "later.codmes.json"), JSON.stringify({
+      schemaVersion: 1,
+      documentPath: "Documents/later.pdf",
+      pages: [{
+        pageIndex: 0,
+        objects: [{ id: "state-first", type: "text", text: "state arrived first" }]
+      }],
+      objects: []
+    }), "utf8");
+    await fs.writeFile(path.join(workspaceRoot, "Documents", "later.pdf"), "%PDF-1.4\nlater\n%%EOF", "utf8");
+    const stateFirstAnnotations = await fetchJson(`${baseUrl}/api/file/annotations?path=Documents/later.pdf`, { token });
+    assert.equal(stateFirstAnnotations.pages[0].objects[0].text, "state arrived first");
+
+    const replacedPdf = await fetchJson(`${baseUrl}/api/file/binary`, {
+      token,
+      method: "PUT",
+      body: {
+        path: "Documents/later.pdf",
+        dataBase64: Buffer.from("%PDF-1.4\nreplaced\n%%EOF", "utf8").toString("base64")
+      }
+    });
+    assert.equal(replacedPdf.path, "Documents/later.pdf");
+    assert.equal(await fs.readFile(path.join(workspaceRoot, "Documents", "later.pdf"), "utf8"), "%PDF-1.4\nreplaced\n%%EOF");
+
+    await Promise.all(["a", "b", "c"].map((name) => fetchJson(`${baseUrl}/api/file/upload`, {
+      token,
+      method: "POST",
+      body: {
+        path: `Notes/concurrent-${name}.md`,
+        dataBase64: Buffer.from(`# Concurrent ${name}\nshared-upload-token-${name}\n`, "utf8").toString("base64")
+      }
+    })));
+    await Promise.all(["a", "b", "c"].map((name) => fetchJson(`${baseUrl}/api/file?path=Notes/concurrent-${name}.md`, {
+      token,
+      method: "PUT",
+      body: {
+        content: `# Concurrent ${name}\nshared-upload-token-${name}\nmodified-token-${name}\n`
+      }
+    })));
+    const concurrentSearch = await fetchJson(`${baseUrl}/api/search`, {
+      token,
+      method: "POST",
+      body: { query: "modified-token-b", scopePath: "Notes", maxResults: 10 }
+    });
+    assert.equal(concurrentSearch.results.some((result) => result.path === "Notes/concurrent-b.md"), true);
 
     const security = await fetchJson(`${baseUrl}/api/security`, { token });
     assert.equal(security.approvalMode, "auto");

@@ -45,6 +45,16 @@ export function joinWorkspacePath(...parts) {
   return normalizeWorkspacePath(parts.filter(Boolean).join("/"));
 }
 
+export function workspaceContentStateDir(workspaceRoot, relativePath) {
+  const normalized = normalizeWorkspacePath(relativePath);
+  const [rootName] = normalized.split("/");
+  const contentRoot = Object.values(WORKSPACE_DIRS).find((value) => value === rootName);
+  if (!contentRoot) {
+    return path.join(workspaceRoot, ".codmes");
+  }
+  return path.join(workspaceRoot, contentRoot, ".codmes");
+}
+
 export function fileKind(name, isDirectory = false) {
   if (isDirectory) return "folder";
   const lower = String(name).toLowerCase();

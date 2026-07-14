@@ -143,7 +143,24 @@ struct PDFAnnotationPage: Codable, Identifiable {
     var id: Int { pageIndex }
     var pageIndex: Int
     var inkDataBase64: String?
+    var inkStrokes: [CodmesInkStroke]? = nil
     var objects: [PDFAnnotationObject]?
+}
+
+struct CodmesInkStroke: Codable, Identifiable {
+    var id: String
+    var tool: String
+    var color: String
+    var width: Double
+    var opacity: Double?
+    var points: [CodmesInkPoint]
+}
+
+struct CodmesInkPoint: Codable {
+    var x: Double
+    var y: Double
+    var pressure: Double?
+    var timeOffset: Double?
 }
 
 struct PDFAnnotationObject: Codable, Identifiable {
