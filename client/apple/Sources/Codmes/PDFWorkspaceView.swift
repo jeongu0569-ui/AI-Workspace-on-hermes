@@ -1964,6 +1964,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         private var shapeHoldWorkItem: DispatchWorkItem?
         private var activeShapeFit: ShapeFit?
         private var lastPenPointTime: TimeInterval = 0
+        private var lastPenOverlayPoint: CGPoint?
         private var lassoInteraction: LassoInteraction?
         private var lassoSelection: LassoSelection?
         private var lassoMoveStartPoint: CodmesInkPoint?
@@ -2194,6 +2195,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     pdfView.drawingOverlay.isDashed = false
                     activeShapeFit = nil
                     lastPenPointTime = ProcessInfo.processInfo.systemUptime
+                    lastPenOverlayPoint = overlayPoint
                     pdfView.drawingOverlay.begin(at: overlayPoint)
                     scheduleShapeHoldFit(page: page)
                 } else if tool == .eraser {
@@ -2221,8 +2223,12 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 guard let page = activePage else { return }
                 if tool == .pen {
                     if activeShapeFit == nil {
-                        pdfView.drawingOverlay.move(to: overlayPoint)
-                        lastPenPointTime = ProcessInfo.processInfo.systemUptime
+                        let movedDistance = lastPenOverlayPoint.map { distance($0, overlayPoint) } ?? .greatestFiniteMagnitude
+                        if movedDistance >= 2.5 {
+                            pdfView.drawingOverlay.move(to: overlayPoint)
+                            lastPenOverlayPoint = overlayPoint
+                            lastPenPointTime = ProcessInfo.processInfo.systemUptime
+                        }
                     }
                 } else if tool == .eraser {
                     eraseStroke(at: viewPoint, page: page)
@@ -2243,6 +2249,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     shapeHoldWorkItem?.cancel()
                     shapeHoldWorkItem = nil
                     activeShapeFit = nil
+                    lastPenOverlayPoint = nil
                     lassoInteraction = nil
                     lassoMoveStartPoint = nil
                     lassoMoveStartStrokes = []
@@ -2298,6 +2305,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 shapeHoldWorkItem?.cancel()
                 shapeHoldWorkItem = nil
                 activeShapeFit = nil
+                lastPenOverlayPoint = nil
                 lassoInteraction = nil
                 lassoMoveStartPoint = nil
                 lassoMoveStartStrokes = []
