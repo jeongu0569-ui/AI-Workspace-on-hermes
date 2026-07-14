@@ -1389,15 +1389,20 @@ private struct SliderRow: View {
 fileprivate final class PDFPageAnnotationOverlay: UIView {
     let canvas = PKCanvasView()
     var objectViews: [String: UIView] = [:]
+    var routesTouchesToCanvas = true
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        isUserInteractionEnabled = true
         backgroundColor = .clear
         isOpaque = false
+        canvas.isUserInteractionEnabled = true
         canvas.backgroundColor = .clear
         canvas.isOpaque = false
         canvas.alwaysBounceVertical = false
         canvas.alwaysBounceHorizontal = false
+        canvas.isScrollEnabled = false
+        canvas.delaysContentTouches = false
         canvas.minimumZoomScale = 1
         canvas.maximumZoomScale = 1
         addSubview(canvas)
@@ -1410,6 +1415,15 @@ fileprivate final class PDFPageAnnotationOverlay: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         canvas.frame = bounds
+        canvas.contentSize = bounds.size
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
+        if routesTouchesToCanvas {
+            return canvas
+        }
+        return super.hitTest(point, with: event)
     }
 }
 
@@ -1476,6 +1490,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             view.document = PDFDocument(url: url)
         }
         context.coordinator.applyToolToVisibleOverlays()
+        context.coordinator.applyPDFNavigationMode()
         context.coordinator.applyAnnotationsToVisibleOverlays()
         context.coordinator.applyFocus()
         if let current = view.currentPage, let index = view.document?.index(for: current), index >= 0 {
@@ -1571,6 +1586,13 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             }
         }
 
+        func applyPDFNavigationMode() {
+            guard let pdfView else { return }
+            let navigationEnabled = tool == .select
+            pdfView.isInMarkupMode = !navigationEnabled
+            setNavigationEnabled(navigationEnabled, in: pdfView)
+        }
+
         func applyAnnotationsToVisibleOverlays() {
             for (pageIndex, overlay) in overlays {
                 applyAnnotation(to: overlay.canvas, pageIndex: pageIndex)
@@ -1592,6 +1614,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         }
 
         private func applyTool(to overlay: PDFPageAnnotationOverlay) {
+            overlay.routesTouchesToCanvas = tool != .select
             overlay.canvas.isUserInteractionEnabled = tool != .select
             for view in overlay.objectViews.values {
                 view.isUserInteractionEnabled = tool == .select
@@ -1599,12 +1622,29 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             switch tool {
             case .pen:
                 overlay.canvas.tool = PKInkingTool(.pen, color: UIColor(hexString: penColorHex), width: CGFloat(penWidth))
+                overlay.canvas.becomeFirstResponder()
             case .eraser:
                 overlay.canvas.tool = PKEraserTool(.vector, width: CGFloat(eraserWidth))
+                overlay.canvas.becomeFirstResponder()
             case .lasso:
                 overlay.canvas.tool = PKLassoTool()
             case .select:
                 break
+            }
+        }
+
+        private func setNavigationEnabled(_ isEnabled: Bool, in view: UIView) {
+            if view is PKCanvasView {
+                return
+            }
+            view.gestureRecognizers?.forEach { $0.isEnabled = isEnabled }
+            if let scrollView = view as? UIScrollView, !(scrollView is PKCanvasView) {
+                scrollView.isScrollEnabled = isEnabled
+                scrollView.panGestureRecognizer.isEnabled = isEnabled
+                scrollView.pinchGestureRecognizer?.isEnabled = isEnabled
+            }
+            for subview in view.subviews {
+                setNavigationEnabled(isEnabled, in: subview)
             }
         }
 
