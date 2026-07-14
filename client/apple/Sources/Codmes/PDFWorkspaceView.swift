@@ -1793,14 +1793,21 @@ fileprivate final class PDFPageAnnotationOverlay: UIView {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
+        for handle in shapeHandleViews.reversed() {
+            guard !handle.isHidden, handle.alpha > 0.01, handle.isUserInteractionEnabled else { continue }
+            let handlePoint = handle.convert(point, from: self)
+            if handle.point(inside: handlePoint, with: event) {
+                return handle.hitTest(handlePoint, with: event)
+            }
+        }
         return super.hitTest(point, with: event)
     }
 }
 
 fileprivate final class PDFShapeHandleView: UIView {
     private enum Metrics {
-        static let hitSize: CGFloat = 36
-        static let dotSize: CGFloat = 12
+        static let hitSize: CGFloat = 40
+        static let dotSize: CGFloat = 8
     }
 
     let strokeId: String
@@ -1819,7 +1826,7 @@ fileprivate final class PDFShapeHandleView: UIView {
         dotView.frame = CGRect(x: 0, y: 0, width: Metrics.dotSize, height: Metrics.dotSize)
         dotView.backgroundColor = .systemBackground
         dotView.layer.borderColor = UIColor.systemOrange.cgColor
-        dotView.layer.borderWidth = 1.25
+        dotView.layer.borderWidth = 1
         dotView.layer.cornerRadius = Metrics.dotSize / 2
         dotView.layer.shadowColor = UIColor.black.cgColor
         dotView.layer.shadowOpacity = 0.18
@@ -2382,6 +2389,9 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            if isTouchOnShapeHandle(touch) {
+                return false
+            }
             if gestureRecognizer === clearSelectionTapGesture {
                 return isWritingMode && tool == .lasso && lassoSelection != nil
             }
@@ -2393,6 +2403,20 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return touch.type == .pencil
             }
             return true
+        }
+
+        private func isTouchOnShapeHandle(_ touch: UITouch) -> Bool {
+            for overlay in overlays.values {
+                let overlayPoint = touch.location(in: overlay)
+                for handle in overlay.shapeHandleViews {
+                    guard !handle.isHidden, handle.alpha > 0.01, handle.isUserInteractionEnabled else { continue }
+                    let handlePoint = handle.convert(overlayPoint, from: overlay)
+                    if handle.point(inside: handlePoint, with: nil) {
+                        return true
+                    }
+                }
+            }
+            return false
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
