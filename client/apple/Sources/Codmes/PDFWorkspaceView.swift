@@ -2575,6 +2575,9 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             }
 
             let closedDistance = distance(points[0], points[points.count - 1])
+            if let openTriangle = openTriangleCandidate(from: points, diagonal: diagonal) {
+                return openTriangle
+            }
             if closedDistance / diagonal >= 0.95 {
                 return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
             }
@@ -2589,13 +2592,14 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             var candidates: [(fit: ShapeFit, score: CGFloat)] = []
             if circleScore > 0.26, let triangleCandidate = bestTriangleCandidate(from: points, diagonal: diagonal) {
                 candidates.append(triangleCandidate)
-                if triangleCandidate.score < 0.22 {
+                if triangleCandidate.score < 0.36 {
                     return triangleCandidate.fit
                 }
-            } else if circleScore > 0.26,
-                      circularityScore < 0.72,
-                      let triangleFallback = fallbackTriangle(from: points, bounds: bounds, diagonal: diagonal) {
-                candidates.append((triangleFallback, 0.32))
+            }
+            if circleScore > 0.26,
+               circularityScore < 0.72,
+               let triangleFallback = fallbackTriangle(from: points, bounds: bounds, diagonal: diagonal) {
+                candidates.append((triangleFallback, 0.24))
             }
 
             let rectPoints = [
@@ -2628,6 +2632,33 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return best.fit
             }
             return ShapeFit(kind: "ellipse", points: ellipse)
+        }
+
+        private func openTriangleCandidate(from points: [CGPoint], diagonal: CGFloat) -> ShapeFit? {
+            guard points.count > 5 else { return nil }
+            let start = points[0]
+            let end = points[points.count - 1]
+            let baseLength = distance(start, end)
+            guard baseLength / diagonal > 0.22 else { return nil }
+
+            var bestIndex = 0
+            var bestDistance: CGFloat = 0
+            for index in points.indices.dropFirst().dropLast() {
+                let candidateDistance = distance(points[index], toSegmentStart: start, end: end)
+                if candidateDistance > bestDistance {
+                    bestDistance = candidateDistance
+                    bestIndex = index
+                }
+            }
+            guard bestDistance / diagonal > 0.18 else { return nil }
+            let apex = points[bestIndex]
+            guard distance(start, apex) / diagonal > 0.2,
+                  distance(apex, end) / diagonal > 0.2 else { return nil }
+
+            let triangle = [start, apex, end, start]
+            let score = polylineError(points, candidate: triangle) / diagonal
+            guard score < 0.42 else { return nil }
+            return ShapeFit(kind: "triangle", points: triangle)
         }
 
         private func pointBounds(_ points: [CGPoint]) -> CGRect? {
