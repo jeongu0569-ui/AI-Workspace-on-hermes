@@ -2713,37 +2713,67 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             }
 
             let endpointGap = distance(points[0], points[points.count - 1]) / diagonal
-            if let templateFit = templateRecognizedShape(from: points, bounds: bounds, diagonal: diagonal, endpointGap: endpointGap) {
-                return templateFit
-            }
-
             var candidates: [ShapeCandidate] = []
+            let lineFit = ShapeFit(kind: "line", points: [points[0], points[points.count - 1]])
+            let lineScore = polylineError(points, candidate: lineFit.points) / diagonal
+            let dominantVertices = deduplicatedVertices(simplify(points, epsilon: max(diagonal * 0.045, 4)), diagonal: diagonal)
+            let isClosedGesture = endpointGap < 0.34
 
-            if endpointGap > 0.22 {
-                let line = ShapeFit(kind: "line", points: [points[0], points[points.count - 1]])
-                let score = polylineError(points, candidate: line.points) / diagonal
-                candidates.append(ShapeCandidate(fit: line, score: score + 0.015))
+            if endpointGap > 0.24, lineScore < 0.105 {
+                let selected = ShapeCandidate(fit: lineFit, score: lineScore + 0.01)
+                lastShapeRecognitionDebug = shapeDebug(selected: selected.fit.kind, reason: "straight-line", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: [selected])
+                return selected.fit
             }
 
-            if openPolylineIntent(points: points, diagonal: diagonal) {
+            if endpointGap > 0.34, openPolylineIntent(points: points, diagonal: diagonal) {
                 let polyline = ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
                 let score = polylineError(points, candidate: polyline.points) / diagonal
                     + CGFloat(polyline.points.count) * 0.006
-                candidates.append(ShapeCandidate(fit: polyline, score: score + 0.02))
+                candidates.append(ShapeCandidate(fit: polyline, score: score + 0.01))
             }
 
-            if endpointGap < 0.58, let gapTriangle = openGapTriangleCandidate(from: points, diagonal: diagonal) {
-                let score = polylineError(points, candidate: gapTriangle.points) / diagonal
-                    + max(0, endpointGap - 0.22) * 0.08
-                candidates.append(ShapeCandidate(fit: gapTriangle, score: score + 0.04))
+            if endpointGap < 0.62, let triangle = bestTriangleFit(from: points, bounds: bounds, diagonal: diagonal) {
+                let vertexBias: CGFloat = dominantVertices.count == 3 ? -0.035 : (isClosedGesture && dominantVertices.count == 4 ? 0.18 : 0)
+                let openGapPenalty = max(0, endpointGap - 0.34) * 0.1
+                candidates.append(ShapeCandidate(fit: triangle.fit, score: triangle.score + vertexBias + openGapPenalty + 0.015))
             }
 
-            candidates.append(contentsOf: closedPolygonCandidates(from: points, diagonal: diagonal))
-            candidates.append(contentsOf: roundCandidates(from: points, bounds: bounds, diagonal: diagonal))
+            if isClosedGesture {
+                candidates.append(contentsOf: closedPolygonCandidates(from: points, diagonal: diagonal))
+                candidates.append(contentsOf: roundCandidates(from: points, bounds: bounds, diagonal: diagonal))
+            }
 
             guard let best = candidates.min(by: { $0.score < $1.score }) else { return nil }
-            if best.score < 0.62 {
-                lastShapeRecognitionDebug = shapeDebug(selected: best.fit.kind, reason: "candidate", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: candidates)
+            if best.fit.kind == "circle" || best.fit.kind == "ellipse" {
+                let angularIntent = angularStrokeIntent(points, diagonal: diagonal)
+                let circularity = closedCircularity(points)
+                if angularIntent && circularity < 0.72 {
+                    let angularCandidates = candidates.filter { $0.fit.kind != "circle" && $0.fit.kind != "ellipse" }
+                    if let angularBest = angularCandidates.min(by: { $0.score < $1.score }), angularBest.score < 0.62 {
+                        lastShapeRecognitionDebug = shapeDebug(selected: angularBest.fit.kind, reason: "angular-over-round", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: candidates)
+                        return angularBest.fit
+                    }
+                }
+            }
+
+            let threshold: CGFloat
+            switch best.fit.kind {
+            case "line":
+                threshold = 0.18
+            case "polyline":
+                threshold = 0.34
+            case "triangle":
+                threshold = 0.56
+            case "rectangle":
+                threshold = 0.34
+            case "circle", "ellipse":
+                threshold = 0.42
+            default:
+                threshold = 0.5
+            }
+
+            if best.score < threshold {
+                lastShapeRecognitionDebug = shapeDebug(selected: best.fit.kind, reason: "structural", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: candidates)
                 return best.fit
             }
 
@@ -3021,27 +3051,15 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 let polygon = vertices + [vertices[0]]
                 let areaRatio = abs(polygonArea(polygon)) / (diagonal * diagonal)
                 guard areaRatio > 0.03 else { continue }
+                if vertices.count == 4 {
+                    guard let bounds = pointBounds(points),
+                          edgeFitRatio(points, bounds: bounds) > 0.48 else { continue }
+                }
                 let score = polylineError(points, candidate: polygon) / diagonal
                     + max(0, endpointGap - 0.18) * 0.18
                     + (vertices.count == 4 ? 0.025 : 0.015)
                 let kind = vertices.count == 4 ? "rectangle" : "triangle"
                 result.append(ShapeCandidate(fit: ShapeFit(kind: kind, points: polygon), score: score))
-            }
-
-            let dominantVertices = deduplicatedVertices(simplify(points, epsilon: max(diagonal * 0.045, 4)), diagonal: diagonal)
-            if dominantVertices.count >= 4,
-               let bounds = pointBounds(points), bounds.width > 8, bounds.height > 8 {
-                let rectangle = [
-                    CGPoint(x: bounds.minX, y: bounds.minY),
-                    CGPoint(x: bounds.maxX, y: bounds.minY),
-                    CGPoint(x: bounds.maxX, y: bounds.maxY),
-                    CGPoint(x: bounds.minX, y: bounds.maxY),
-                    CGPoint(x: bounds.minX, y: bounds.minY)
-                ]
-                let score = polylineError(points, candidate: rectangle) / diagonal
-                    + max(0, endpointGap - 0.2) * 0.16
-                    + (dominantVertices.count == 4 ? 0.055 : 0.14)
-                result.append(ShapeCandidate(fit: ShapeFit(kind: "rectangle", points: rectangle), score: score))
             }
 
             return result
@@ -3088,12 +3106,17 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                   angleCoverage > 0.48,
                   circularityScore > 0.28 else { return [] }
             let dominantVertices = deduplicatedVertices(simplify(points, epsilon: max(diagonal * 0.04, 4)), diagonal: diagonal)
-            guard dominantVertices.count > 4 || circularityScore > 0.58 else { return [] }
+            guard dominantVertices.count > 5 || circularityScore > 0.64 else { return [] }
+            if dominantVertices.count <= 5,
+               angularStrokeIntent(points, diagonal: diagonal),
+               circularityScore < 0.86 {
+                return []
+            }
 
             var result: [ShapeCandidate] = []
             let coveragePenalty = max(0, 0.8 - angleCoverage) * 0.12
             let closurePenalty = max(0, endpointGap - 0.2) * 0.18
-            let cornerPenalty: CGFloat = dominantVertices.count <= 5 ? 0.08 : 0
+            let cornerPenalty: CGFloat = dominantVertices.count <= 5 ? 0.16 : 0
             if circleScore < 0.54 {
                 result.append(ShapeCandidate(
                     fit: ShapeFit(kind: "circle", points: circlePoints(in: bounds, count: 48)),
