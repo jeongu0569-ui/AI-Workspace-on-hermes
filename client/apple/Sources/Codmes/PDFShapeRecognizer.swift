@@ -37,6 +37,11 @@ struct PDFShapeRecognitionResult {
     var debug: PDFShapeRecognitionDebug
 }
 
+struct PDFShapeRecognitionAttempt {
+    var fit: PDFShapeFit?
+    var debug: PDFShapeRecognitionDebug
+}
+
 struct PDFShapeRecognizer {
     private struct Candidate {
         var fit: PDFShapeFit
@@ -46,6 +51,12 @@ struct PDFShapeRecognizer {
     }
 
     func recognize(points rawPoints: [CGPoint]) -> PDFShapeRecognitionResult? {
+        guard let attempt = recognizeAttempt(points: rawPoints),
+              let fit = attempt.fit else { return nil }
+        return PDFShapeRecognitionResult(fit: fit, debug: attempt.debug)
+    }
+
+    func recognizeAttempt(points rawPoints: [CGPoint]) -> PDFShapeRecognitionAttempt? {
         var points = resampled(rawPoints, spacing: 4)
         points = smoothed(points)
         guard points.count > 8, let bounds = pointBounds(points) else {
@@ -195,16 +206,18 @@ struct PDFShapeRecognizer {
         return result
     }
 
-    private func success(_ candidate: Candidate, selected: String, reason: String, points: [CGPoint], endpointGap: CGFloat, candidates: [Candidate]) -> PDFShapeRecognitionResult {
-        PDFShapeRecognitionResult(
+    private func success(_ candidate: Candidate, selected: String, reason: String, points: [CGPoint], endpointGap: CGFloat, candidates: [Candidate]) -> PDFShapeRecognitionAttempt {
+        PDFShapeRecognitionAttempt(
             fit: candidate.fit,
             debug: debug(selected: selected, reason: reason, points: points, endpointGap: endpointGap, vertexCount: candidate.vertices.count, candidates: candidates)
         )
     }
 
-    private func failure(selected: String, reason: String, points: [CGPoint], endpointGap: CGFloat, vertexCount: Int, candidates: [Candidate]) -> PDFShapeRecognitionResult? {
-        _ = debug(selected: selected, reason: reason, points: points, endpointGap: endpointGap, vertexCount: vertexCount, candidates: candidates)
-        return nil
+    private func failure(selected: String, reason: String, points: [CGPoint], endpointGap: CGFloat, vertexCount: Int, candidates: [Candidate]) -> PDFShapeRecognitionAttempt {
+        PDFShapeRecognitionAttempt(
+            fit: nil,
+            debug: debug(selected: selected, reason: reason, points: points, endpointGap: endpointGap, vertexCount: vertexCount, candidates: candidates)
+        )
     }
 
     private func debug(selected: String, reason: String, points: [CGPoint], endpointGap: CGFloat, vertexCount: Int, candidates: [Candidate]) -> PDFShapeRecognitionDebug {

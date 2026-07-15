@@ -14,6 +14,7 @@
 		3E8DC8B1723C4A2FA10A1594 /* WorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29CB2E54F6EF47EEA71CC126 /* WorkspaceStore.swift */; };
 		3FA1A001A0B14A6F9B99C001 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FA1A000A0B14A6F9B99C001 /* KeychainStore.swift */; };
 		99A0E6B3E90E492CBD0DD601 /* ApprovalsInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99A0E6B3E90E492CBD0DD600 /* ApprovalsInboxView.swift */; };
+		9C0D50210000000000000001 /* PDFShapeSampleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0D50200000000000000001 /* PDFShapeSampleStore.swift */; };
 		9C0D50110000000000000001 /* PDFShapeRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0D50100000000000000001 /* PDFShapeRecognizer.swift */; };
 		9C0D50010000000000000001 /* PDFWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0D50000000000000000001 /* PDFWorkspaceView.swift */; };
 
@@ -32,6 +33,7 @@
 		F29F27586DE64EA98831454D /* WorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29CB2E54F6EF47EEA71CC126 /* WorkspaceStore.swift */; };
 		3FA1A002A0B14A6F9B99C001 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FA1A000A0B14A6F9B99C001 /* KeychainStore.swift */; };
 		99A0E6B3E90E492CBD0DD602 /* ApprovalsInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99A0E6B3E90E492CBD0DD600 /* ApprovalsInboxView.swift */; };
+		9C0D50220000000000000001 /* PDFShapeSampleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0D50200000000000000001 /* PDFShapeSampleStore.swift */; };
 		9C0D50120000000000000001 /* PDFShapeRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0D50100000000000000001 /* PDFShapeRecognizer.swift */; };
 		9C0D50020000000000000001 /* PDFWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0D50000000000000000001 /* PDFWorkspaceView.swift */; };
 
@@ -51,6 +53,7 @@
 		5241C0E1854D4E939201DB3F /* HeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeaderView.swift; sourceTree = "<group>"; };
 		73779B0EDE9A4F3B9DFC6517 /* LiveChatClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveChatClient.swift; sourceTree = "<group>"; };
 		8708198D47F24EFCA25FA2FF /* ChatHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHomeView.swift; sourceTree = "<group>"; };
+		9C0D50200000000000000001 /* PDFShapeSampleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFShapeSampleStore.swift; sourceTree = "<group>"; };
 		9C0D50100000000000000001 /* PDFShapeRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFShapeRecognizer.swift; sourceTree = "<group>"; };
 		9C0D50000000000000000001 /* PDFWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFWorkspaceView.swift; sourceTree = "<group>"; };
 		92BE9EF47DFF4ADF85510D52 /* Codmes.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Codmes.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -90,6 +93,7 @@
 				3FA1A000A0B14A6F9B99C001 /* KeychainStore.swift */,
 				73779B0EDE9A4F3B9DFC6517 /* LiveChatClient.swift */,
 				2C7EC532D8964FC2B78C9C43 /* Models.swift */,
+				9C0D50200000000000000001 /* PDFShapeSampleStore.swift */,
 				9C0D50100000000000000001 /* PDFShapeRecognizer.swift */,
 				9C0D50000000000000000001 /* PDFWorkspaceView.swift */,
 				CC742CBD01884A2190D55DA2 /* RootView.swift */,
@@ -212,6 +216,7 @@
 				3FA1A001A0B14A6F9B99C001 /* KeychainStore.swift in Sources */,
 				82D33833400243A1BA45C06B /* LiveChatClient.swift in Sources */,
 				182914B2EEE94CCEB66C0433 /* Models.swift in Sources */,
+				9C0D50210000000000000001 /* PDFShapeSampleStore.swift in Sources */,
 				9C0D50110000000000000001 /* PDFShapeRecognizer.swift in Sources */,
 				9C0D50010000000000000001 /* PDFWorkspaceView.swift in Sources */,
 				C053B1D066564AAF9EB163CF /* RootView.swift in Sources */,
@@ -233,6 +238,7 @@
 				3FA1A002A0B14A6F9B99C001 /* KeychainStore.swift in Sources */,
 				43FBD23C9D0E4947AA3E9A42 /* LiveChatClient.swift in Sources */,
 				B15EE4FF94EB4FFDB66F99E3 /* Models.swift in Sources */,
+				9C0D50220000000000000001 /* PDFShapeSampleStore.swift in Sources */,
 				9C0D50120000000000000001 /* PDFShapeRecognizer.swift in Sources */,
 				9C0D50020000000000000001 /* PDFWorkspaceView.swift in Sources */,
 				DC869511E1264A16B71CDAFA /* RootView.swift in Sources */,

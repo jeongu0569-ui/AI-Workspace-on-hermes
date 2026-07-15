@@ -2673,9 +2673,10 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
 
         private func fitShape(from points: [CGPoint]) -> ShapeFit? {
             lastShapeRecognitionDebug = nil
-            guard let result = PDFShapeRecognizer().recognize(points: points) else { return nil }
-            lastShapeRecognitionDebug = result.debug
-            return result.fit
+            guard let attempt = PDFShapeRecognizer().recognizeAttempt(points: points) else { return nil }
+            lastShapeRecognitionDebug = attempt.debug
+            PDFShapeSampleStore.append(source: "pdf-notes-hold", rawPoints: points, attempt: attempt)
+            return attempt.fit
         }
 
         private func templateRecognizedShape(from points: [CGPoint], bounds: CGRect, diagonal: CGFloat, endpointGap: CGFloat) -> ShapeFit? {
