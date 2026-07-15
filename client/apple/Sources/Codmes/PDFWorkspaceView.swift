@@ -2513,6 +2513,11 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     opposite = CGPoint(x: bounds.maxX, y: bounds.minY)
                 }
                 return ShapeFit(kind: fit.kind, points: rectanglePoints(from: point, to: opposite))
+            case "circle":
+                guard let bounds = pointBounds(fit.points) else { return fit }
+                let center = CGPoint(x: bounds.midX, y: bounds.midY)
+                let radius = max(distance(center, point), 1)
+                return ShapeFit(kind: fit.kind, points: circlePoints(center: center, radius: radius, count: 48))
             case "ellipse":
                 guard let bounds = pointBounds(fit.points) else { return fit }
                 var minX = bounds.minX
@@ -2544,7 +2549,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return fit.points.prefix(4).enumerated().map { (index: $0.offset, point: $0.element) }
             case "triangle":
                 return fit.points.prefix(3).enumerated().map { (index: $0.offset, point: $0.element) }
-            case "ellipse":
+            case "circle", "ellipse":
                 guard let bounds = pointBounds(fit.points) else { return [] }
                 return [
                     (0, CGPoint(x: bounds.midX, y: bounds.minY)),
@@ -2569,14 +2574,17 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             }
 
             let closedDistance = distance(points[0], points[points.count - 1])
-            guard closedDistance / diagonal < 0.65 else { return nil }
+            guard closedDistance / diagonal < 0.95 else { return nil }
 
             let edgeFit = edgeFitRatio(points, bounds: bounds)
+            let circle = circlePoints(in: bounds, count: 48)
             let ellipse = ellipsePoints(in: bounds, count: 48)
             let ellipseScore = ellipseFitError(points, bounds: bounds)
+            let circleScore = circleFitError(points, bounds: bounds)
+            let angleCoverage = angularCoverage(points, bounds: bounds)
             let circularityScore = closedCircularity(points)
             var candidates: [(fit: ShapeFit, score: CGFloat)] = []
-            if circularityScore < 0.74, let triangleCandidate = bestTriangleCandidate(from: points, diagonal: diagonal) {
+            if circleScore > 0.26, let triangleCandidate = bestTriangleCandidate(from: points, diagonal: diagonal) {
                 candidates.append(triangleCandidate)
             }
 
@@ -2587,8 +2595,8 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 CGPoint(x: bounds.minX, y: bounds.maxY),
                 CGPoint(x: bounds.minX, y: bounds.minY)
             ]
-            if ellipseScore < 0.28, edgeFit < 0.6, circularityScore > 0.62 {
-                return ShapeFit(kind: "ellipse", points: ellipse)
+            if circleScore < 0.24, angleCoverage > 0.68, edgeFit < 0.72 {
+                return ShapeFit(kind: "circle", points: circle)
             }
 
             let rectanglePolylineScore = polylineError(points, candidate: rectPoints) / diagonal
@@ -2596,6 +2604,10 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             let rectangleScore = max(rectanglePolylineScore, rectangleEdgeMissScore)
             if rectangleScore < 0.36 {
                 candidates.append((ShapeFit(kind: "rectangle", points: rectPoints), rectangleScore))
+            }
+
+            if circleScore < 0.34, angleCoverage > 0.58 {
+                candidates.append((ShapeFit(kind: "circle", points: circle), circleScore * 0.55))
             }
 
             if ellipseScore < 0.5, circularityScore > 0.52 {
@@ -2647,14 +2659,48 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         private func polygonVertexOptions(from points: [CGPoint], diagonal: CGFloat) -> [[CGPoint]] {
             let multipliers: [CGFloat] = [0.04, 0.055, 0.075, 0.095, 0.12, 0.15, 0.2]
             var options: [[CGPoint]] = []
-            for multiplier in multipliers {
-                let vertices = polygonVertices(from: points, epsilon: diagonal * multiplier)
-                guard vertices.count >= 3, vertices.count <= 6 else { continue }
-                if !options.contains(where: { areSimilarVertices($0, vertices, tolerance: diagonal * 0.035) }) {
-                    options.append(vertices)
+            let sourceOptions = [points, convexHull(points)].filter { $0.count >= 3 }
+            for source in sourceOptions {
+                for multiplier in multipliers {
+                    let vertices = polygonVertices(from: source, epsilon: diagonal * multiplier)
+                    guard vertices.count >= 3, vertices.count <= 8 else { continue }
+                    if !options.contains(where: { areSimilarVertices($0, vertices, tolerance: diagonal * 0.035) }) {
+                        options.append(vertices)
+                    }
                 }
             }
             return options
+        }
+
+        private func convexHull(_ points: [CGPoint]) -> [CGPoint] {
+            let sorted = points.sorted {
+                if abs($0.x - $1.x) > 0.001 {
+                    return $0.x < $1.x
+                }
+                return $0.y < $1.y
+            }
+            guard sorted.count > 2 else { return sorted }
+            var lower: [CGPoint] = []
+            for point in sorted {
+                while lower.count >= 2,
+                      cross(lower[lower.count - 2], lower[lower.count - 1], point) <= 0 {
+                    lower.removeLast()
+                }
+                lower.append(point)
+            }
+            var upper: [CGPoint] = []
+            for point in sorted.reversed() {
+                while upper.count >= 2,
+                      cross(upper[upper.count - 2], upper[upper.count - 1], point) <= 0 {
+                    upper.removeLast()
+                }
+                upper.append(point)
+            }
+            return Array((lower.dropLast() + upper.dropLast()))
+        }
+
+        private func cross(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGFloat {
+            (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
         }
 
         private func bestTriangleCandidate(from points: [CGPoint], diagonal: CGFloat) -> (fit: ShapeFit, score: CGFloat)? {
@@ -2664,8 +2710,8 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 for trianglePoints in triangles {
                     let triangle = trianglePoints + [trianglePoints[0]]
                     let score = polylineError(points, candidate: triangle) / diagonal
-                    guard score < 0.34 else { continue }
-                    let weighted = score * 0.72
+                    guard score < 0.46 else { continue }
+                    let weighted = score * 0.58
                     if best == nil || weighted < best!.score {
                         best = (ShapeFit(kind: "triangle", points: triangle), weighted)
                     }
@@ -2721,6 +2767,30 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             return length
         }
 
+        private func circleFitError(_ points: [CGPoint], bounds: CGRect) -> CGFloat {
+            let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            let radius = max(min(bounds.width, bounds.height) / 2, 1)
+            let errors = points.map { abs(distance($0, center) / radius - 1) }
+            let sorted = errors.sorted()
+            guard !sorted.isEmpty else { return .greatestFiniteMagnitude }
+            let cutoff = max(1, Int(CGFloat(sorted.count) * 0.82))
+            return sorted.prefix(cutoff).reduce(0, +) / CGFloat(cutoff)
+        }
+
+        private func angularCoverage(_ points: [CGPoint], bounds: CGRect) -> CGFloat {
+            let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            var bins = Set<Int>()
+            let binCount = 24
+            for point in points where distance(point, center) > 1 {
+                var angle = atan2(point.y - center.y, point.x - center.x)
+                if angle < 0 {
+                    angle += .pi * 2
+                }
+                bins.insert(min(binCount - 1, max(0, Int(angle / (.pi * 2) * CGFloat(binCount)))))
+            }
+            return CGFloat(bins.count) / CGFloat(binCount)
+        }
+
         private func ellipseFitError(_ points: [CGPoint], bounds: CGRect) -> CGFloat {
             let rx = max(bounds.width / 2, 1)
             let ry = max(bounds.height / 2, 1)
@@ -2730,6 +2800,19 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return abs(normalizedRadius - 1)
             }
             return errors.reduce(0, +) / CGFloat(max(errors.count, 1))
+        }
+
+        private func circlePoints(in bounds: CGRect, count: Int) -> [CGPoint] {
+            let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            let radius = max(bounds.width, bounds.height) / 2
+            return circlePoints(center: center, radius: radius, count: count)
+        }
+
+        private func circlePoints(center: CGPoint, radius: CGFloat, count: Int) -> [CGPoint] {
+            (0...count).map { index in
+                let angle = CGFloat(index) / CGFloat(count) * .pi * 2
+                return CGPoint(x: center.x + cos(angle) * radius, y: center.y + sin(angle) * radius)
+            }
         }
 
         private func ellipsePoints(in bounds: CGRect, count: Int) -> [CGPoint] {
@@ -3112,7 +3195,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return stroke.points.prefix(4).enumerated().map { ($0.offset, viewPoint($0.element)) }
             case "triangle":
                 return stroke.points.prefix(3).enumerated().map { ($0.offset, viewPoint($0.element)) }
-            case "ellipse":
+            case "circle", "ellipse":
                 guard let box = normalizedBounds(for: stroke.points) else { return [] }
                 return [
                     (0, CGPoint(x: bounds.width * (box.x + box.width / 2), y: bounds.height * box.y)),
@@ -3230,6 +3313,16 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     opposite = CodmesInkPoint(x: box.x + box.width, y: box.y, pressure: nil, timeOffset: nil)
                 }
                 next.points = rectanglePoints(from: point, to: opposite)
+            case "circle":
+                guard let box = normalizedBounds(for: next.points) else { return next }
+                let center = CodmesInkPoint(
+                    x: box.x + box.width / 2,
+                    y: box.y + box.height / 2,
+                    pressure: nil,
+                    timeOffset: nil
+                )
+                let radius = max(abs(point.x - center.x), abs(point.y - center.y), 0.005)
+                next.points = circlePoints(center: center, radius: radius, count: 48)
             case "ellipse":
                 guard let box = normalizedBounds(for: next.points) else { return next }
                 var minX = box.x
@@ -3288,6 +3381,19 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             let bottomRight = CodmesInkPoint(x: box.x + box.width, y: box.y + box.height, pressure: nil, timeOffset: nil)
             let bottomLeft = CodmesInkPoint(x: box.x, y: box.y + box.height, pressure: nil, timeOffset: nil)
             return [topLeft, topRight, bottomRight, bottomLeft, topLeft]
+        }
+
+        private func circlePoints(center: CodmesInkPoint, radius: Double, count: Int) -> [CodmesInkPoint] {
+            let clampedRadius = max(0.005, min(radius, center.x, 1 - center.x, center.y, 1 - center.y))
+            return (0...count).map { index in
+                let angle = Double(index) / Double(count) * Double.pi * 2
+                return CodmesInkPoint(
+                    x: center.x + cos(angle) * clampedRadius,
+                    y: center.y + sin(angle) * clampedRadius,
+                    pressure: nil,
+                    timeOffset: nil
+                )
+            }
         }
 
         private func ellipsePoints(in box: NormalizedBoundingBox, count: Int) -> [CodmesInkPoint] {
