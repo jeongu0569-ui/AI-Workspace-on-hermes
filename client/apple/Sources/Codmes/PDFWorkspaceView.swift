@@ -2555,6 +2555,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                       let page,
                       self.tool == .pen,
                       self.activePage === page else { return }
+                guard self.activeShapeFit == nil else { return }
                 let now = ProcessInfo.processInfo.systemUptime
                 if now - self.lastPenPointTime < 0.5 {
                     self.scheduleShapeHoldFit(page: page)

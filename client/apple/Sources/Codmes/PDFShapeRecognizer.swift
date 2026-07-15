@@ -109,7 +109,7 @@ struct PDFShapeRecognizer {
 
         if let polylineBest = candidates
             .filter({ $0.fit.kind == "polyline" })
-            .min(by: { $0.score < $1.score }),
+           .min(by: { $0.score < $1.score }),
            let triangleBest = candidates
             .filter({ $0.fit.kind == "triangle" })
             .min(by: { $0.score < $1.score }),
@@ -339,6 +339,14 @@ struct PDFShapeRecognizer {
         let matchingExisting = existingCandidates
             .filter { $0.fit.kind == match.kind }
             .min(by: { $0.score < $1.score })
+        if match.kind != "polyline",
+           let polylineBest = existingCandidates
+            .filter({ $0.fit.kind == "polyline" })
+            .min(by: { $0.score < $1.score }),
+           let bounds = pointBounds(points),
+           isStrongOpenPolylineIntent(polylineBest, points: points, bounds: bounds, diagonal: diagonal, endpointGap: endpointGap, candidates: existingCandidates) {
+            return nil
+        }
         let fit: PDFShapeFit
         let vertices: [CGPoint]
         if let matchingExisting {
@@ -379,6 +387,45 @@ struct PDFShapeRecognizer {
 
         let score = max(0.012, match.distance * 0.18 + 0.01)
         return Candidate(fit: fit, score: score, reason: "exemplar-bank:\(String(format: "%.3f", Double(match.distance)))", vertices: vertices)
+    }
+
+    private func isStrongOpenPolylineIntent(
+        _ polyline: Candidate,
+        points: [CGPoint],
+        bounds: CGRect,
+        diagonal: CGFloat,
+        endpointGap: CGFloat,
+        candidates: [Candidate]
+    ) -> Bool {
+        guard endpointGap > 0.68,
+              polyline.vertices.count >= 5,
+              polyline.score < 0.04 else { return false }
+        if let lineBest = candidates
+            .filter({ $0.fit.kind == "line" })
+            .min(by: { $0.score < $1.score }),
+           lineBest.score < 0.24 {
+            return false
+        }
+        if let rectangleBest = candidates
+            .filter({ $0.fit.kind == "rectangle" })
+            .min(by: { $0.score < $1.score }),
+           rectangleBest.score < 0.08,
+           edgeFitRatio(points, bounds: bounds) > 0.48,
+           rectangleCornerCoverage(points, bounds: bounds) > 0.018 {
+            return false
+        }
+        if endpointGap < 0.82,
+           let angularBest = candidates
+            .filter({ $0.fit.kind == "triangle" || $0.fit.kind == "rectangle" })
+            .min(by: { $0.score < $1.score }),
+           angularBest.score < 0.08 {
+            return false
+        }
+        if endpointGap < 0.78,
+           closedCircularity(points) > 0.52 {
+            return false
+        }
+        return true
     }
 
     private func normalizedExemplarPath(_ points: [CGPoint]) -> [Float] {
