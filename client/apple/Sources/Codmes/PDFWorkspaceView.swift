@@ -2583,13 +2583,15 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             let angleCoverage = angularCoverage(points, bounds: bounds)
             let circularityScore = closedCircularity(points)
             let angularStroke = angularStrokeIntent(points, diagonal: diagonal)
+            let dominantVertices = deduplicatedVertices(simplify(points, epsilon: max(diagonal * 0.045, 4)), diagonal: diagonal)
             let roundStroke = closedRoundIntent(
                 points: points,
                 diagonal: diagonal,
                 circleScore: circleScore,
                 angleCoverage: angleCoverage,
                 circularityScore: circularityScore,
-                angularStroke: angularStroke
+                angularStroke: angularStroke,
+                dominantVertexCount: dominantVertices.count
             )
 
             if openPolylineIntent(points: points, diagonal: diagonal, angularStroke: angularStroke) {
@@ -2614,7 +2616,8 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 edgeFit: edgeFit,
                 circularityScore: circularityScore,
                 roundStroke: roundStroke,
-                angularStroke: angularStroke
+                angularStroke: angularStroke,
+                dominantVertexCount: dominantVertices.count
             ) {
                 return ShapeFit(kind: "rectangle", points: rectPoints)
             }
@@ -2776,15 +2779,18 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             edgeFit: CGFloat,
             circularityScore: CGFloat,
             roundStroke: Bool,
-            angularStroke: Bool
+            angularStroke: Bool,
+            dominantVertexCount: Int
         ) -> Bool {
             let endpointGap = distance(points[0], points[points.count - 1]) / diagonal
             guard endpointGap < 0.24,
-                  !roundStroke,
                   angularStroke,
-                  circularityScore < 0.58,
+                  dominantVertexCount == 4,
                   edgeFit > 0.36,
-                  rectangleScore < 0.32 else { return false }
+                  rectangleScore < 0.38 else { return false }
+            if roundStroke, circularityScore > 0.86 {
+                return false
+            }
             return true
         }
 
@@ -2794,13 +2800,17 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             circleScore: CGFloat,
             angleCoverage: CGFloat,
             circularityScore: CGFloat,
-            angularStroke: Bool
+            angularStroke: Bool,
+            dominantVertexCount: Int
         ) -> Bool {
             let endpointGap = distance(points[0], points[points.count - 1]) / diagonal
             guard endpointGap < 0.5,
                   angleCoverage > 0.55,
                   circularityScore > 0.38,
                   circleScore < 0.46 else { return false }
+            if angularStroke, dominantVertexCount <= 5 {
+                return false
+            }
             if angularStroke, circularityScore < 0.58 {
                 return false
             }
