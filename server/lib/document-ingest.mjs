@@ -348,16 +348,38 @@ async function readAnnotationsForDocument(workspaceRoot, relativePath) {
 
 function collectAnnotationObjects(annotations = {}) {
   const rootObjects = Array.isArray(annotations.objects) ? annotations.objects : [];
+  const seenIds = new Set(rootObjects.map((object) => object?.id).filter(Boolean));
   const pageObjects = [];
   for (const page of Array.isArray(annotations.pages) ? annotations.pages : []) {
     for (const object of Array.isArray(page.objects) ? page.objects : []) {
+      if (object?.id) seenIds.add(object.id);
       pageObjects.push({
         ...object,
         pageIndex: object.pageIndex ?? page.pageIndex
       });
     }
+    for (const element of Array.isArray(page.elements) ? page.elements : []) {
+      if (typeof element.text === "string" && element.text.trim() && !seenIds.has(element.id)) {
+        if (element.id) seenIds.add(element.id);
+        pageObjects.push({
+          ...element,
+          pageIndex: element.pageIndex ?? page.pageIndex,
+          type: element.type || "text"
+        });
+      }
+    }
   }
-  return [...rootObjects, ...pageObjects];
+  const rootElements = [];
+  for (const element of Array.isArray(annotations.elements) ? annotations.elements : []) {
+    if (typeof element.text === "string" && element.text.trim() && !seenIds.has(element.id)) {
+      if (element.id) seenIds.add(element.id);
+      rootElements.push({
+        ...element,
+        type: element.type || "text"
+      });
+    }
+  }
+  return [...rootObjects, ...rootElements, ...pageObjects];
 }
 
 function annotationBlock(relativePath, object, text, source, metadata = {}) {

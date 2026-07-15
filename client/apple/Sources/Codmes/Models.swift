@@ -137,6 +137,7 @@ struct PDFAnnotationDocument: Codable {
     var updatedAt: String?
     var pages: [PDFAnnotationPage]
     var objects: [PDFAnnotationObject]
+    var elements: [CodmesNoteElement]? = nil
 }
 
 struct PDFAnnotationPage: Codable, Identifiable {
@@ -145,6 +146,7 @@ struct PDFAnnotationPage: Codable, Identifiable {
     var inkDataBase64: String?
     var inkStrokes: [CodmesInkStroke]? = nil
     var objects: [PDFAnnotationObject]?
+    var elements: [CodmesNoteElement]? = nil
 }
 
 struct CodmesInkStroke: Codable, Identifiable {
@@ -156,7 +158,7 @@ struct CodmesInkStroke: Codable, Identifiable {
     var points: [CodmesInkPoint]
 }
 
-struct CodmesInkPoint: Codable {
+struct CodmesInkPoint: Codable, Equatable {
     var x: Double
     var y: Double
     var pressure: Double?
@@ -173,6 +175,48 @@ struct PDFAnnotationObject: Codable, Identifiable {
     var metadata: [String: String]?
 }
 
+struct CodmesNoteElement: Codable, Identifiable {
+    var id: String
+    var type: String
+    var pageIndex: Int
+    var bbox: AnnotationBoundingBox?
+    var transform: CodmesNoteTransform?
+    var style: CodmesNoteStyle?
+    var zIndex: Int?
+    var stroke: CodmesInkStroke?
+    var shape: CodmesNoteShape?
+    var text: String?
+    var image: CodmesNoteImage?
+    var metadata: [String: String]?
+    var source: String?
+}
+
+struct CodmesNoteTransform: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var scaleX: Double
+    var scaleY: Double
+    var rotation: Double
+}
+
+struct CodmesNoteStyle: Codable, Equatable {
+    var strokeColor: String?
+    var fillColor: String?
+    var lineWidth: Double?
+    var opacity: Double?
+    var fontSize: Double?
+}
+
+struct CodmesNoteShape: Codable, Equatable {
+    var kind: String
+    var points: [CodmesInkPoint]
+}
+
+struct CodmesNoteImage: Codable, Equatable {
+    var dataBase64: String
+    var mimeType: String?
+}
+
 struct AnnotationBoundingBox: Codable, Equatable {
     var x: Double
     var y: Double
@@ -186,6 +230,113 @@ struct NormalizedBoundingBox: Codable, Equatable {
     var y: Double
     var width: Double
     var height: Double
+}
+
+extension PDFAnnotationDocument {
+    mutating func syncNoteElementsFromLegacy() {
+        schemaVersion = max(schemaVersion, 2)
+        pages = pages.map { page in
+            var copy = page
+            let legacyElements = page.noteElementsFromLegacy()
+            let legacyIds = Set(legacyElements.map(\.id))
+            let retainedElements = (page.elements ?? []).filter { !legacyIds.contains($0.id) }
+            copy.elements = legacyElements + retainedElements
+            return copy
+        }
+        let legacyRootElements: [CodmesNoteElement] = self.objects.compactMap { object in
+            guard let pageIndex = object.pageIndex else { return nil }
+            return object.noteElement(pageIndex: pageIndex)
+        }
+        let legacyRootIds = Set(legacyRootElements.map { $0.id })
+        let retainedRootElements = (self.elements ?? []).filter { !legacyRootIds.contains($0.id) }
+        self.elements = legacyRootElements + retainedRootElements
+    }
+
+    func syncedNoteElementsFromLegacy() -> PDFAnnotationDocument {
+        var copy = self
+        copy.syncNoteElementsFromLegacy()
+        return copy
+    }
+}
+
+extension PDFAnnotationPage {
+    func noteElementsFromLegacy() -> [CodmesNoteElement] {
+        let strokeElements = (inkStrokes ?? []).map { $0.noteElement(pageIndex: pageIndex) }
+        let objectElements = (objects ?? []).map { $0.noteElement(pageIndex: $0.pageIndex ?? pageIndex) }
+        return strokeElements + objectElements
+    }
+}
+
+extension CodmesInkStroke {
+    func noteElement(pageIndex: Int) -> CodmesNoteElement {
+        let shapeKind = metadataShapeKind
+        return CodmesNoteElement(
+            id: id,
+            type: shapeKind == nil ? "stroke" : "shape",
+            pageIndex: pageIndex,
+            bbox: nil,
+            transform: CodmesNoteTransform.identity,
+            style: CodmesNoteStyle(
+                strokeColor: color,
+                fillColor: nil,
+                lineWidth: width,
+                opacity: opacity,
+                fontSize: nil
+            ),
+            zIndex: nil,
+            stroke: self,
+            shape: shapeKind.map { CodmesNoteShape(kind: $0, points: points) },
+            text: nil,
+            image: nil,
+            metadata: ["tool": tool],
+            source: "legacyInkStroke"
+        )
+    }
+
+    private var metadataShapeKind: String? {
+        if tool.hasPrefix("shape:") {
+            return String(tool.dropFirst("shape:".count))
+        }
+        if tool == "line" || tool == "polyline" || tool == "triangle" || tool == "rectangle" || tool == "circle" || tool == "ellipse" {
+            return tool
+        }
+        return nil
+    }
+}
+
+extension PDFAnnotationObject {
+    func noteElement(pageIndex: Int) -> CodmesNoteElement {
+        let objectType = type.lowercased().contains("image") ? "image" : (type.lowercased().contains("text") ? "text" : type)
+        let fontSize = Double(metadata?["fontSize"] ?? "")
+        let color = metadata?["color"]
+        return CodmesNoteElement(
+            id: id,
+            type: objectType,
+            pageIndex: pageIndex,
+            bbox: bbox,
+            transform: CodmesNoteTransform.identity,
+            style: CodmesNoteStyle(
+                strokeColor: color,
+                fillColor: nil,
+                lineWidth: nil,
+                opacity: nil,
+                fontSize: fontSize
+            ),
+            zIndex: nil,
+            stroke: nil,
+            shape: nil,
+            text: text,
+            image: dataBase64.map { CodmesNoteImage(dataBase64: $0, mimeType: metadata?["mimeType"]) },
+            metadata: metadata,
+            source: "legacyAnnotationObject"
+        )
+    }
+}
+
+extension CodmesNoteTransform {
+    static var identity: CodmesNoteTransform {
+        CodmesNoteTransform(x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0)
+    }
 }
 
 struct SearchResponse: Codable {

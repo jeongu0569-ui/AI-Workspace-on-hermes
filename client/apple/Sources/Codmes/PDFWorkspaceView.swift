@@ -673,11 +673,13 @@ struct PDFWorkspaceView: View {
     private func loadAnnotations() async {
         guard let api = store.api else { return }
         do {
-            annotations = try await api.fileAnnotations(path: rawFile.path)
+            var loaded = try await api.fileAnnotations(path: rawFile.path)
+            loaded.syncNoteElementsFromLegacy()
+            annotations = loaded
             statusText = annotations?.pages.isEmpty == false ? "Annotations loaded" : "Ready"
         } catch {
             annotations = PDFAnnotationDocument(
-                schemaVersion: 1,
+                schemaVersion: 2,
                 documentPath: rawFile.path,
                 updatedAt: nil,
                 pages: [],
@@ -1125,7 +1127,7 @@ struct PDFWorkspaceView: View {
 
     private func emptyAnnotationDocument() -> PDFAnnotationDocument {
         PDFAnnotationDocument(
-            schemaVersion: 1,
+            schemaVersion: 2,
             documentPath: rawFile.path,
             updatedAt: nil,
             pages: [],
@@ -1135,20 +1137,21 @@ struct PDFWorkspaceView: View {
 
     private func scheduleSave(_ document: PDFAnnotationDocument) {
         statusText = "Saving..."
+        let syncedDocument = document.syncedNoteElementsFromLegacy()
         saveTask?.cancel()
         saveTask = Task {
             try? await Task.sleep(nanoseconds: 650_000_000)
             guard !Task.isCancelled else { return }
-            await saveAnnotations(document)
+            await saveAnnotations(syncedDocument)
         }
     }
 
     private func saveAnnotations(_ document: PDFAnnotationDocument) async {
         guard let api = store.api else { return }
         do {
-            let saved = try await api.saveFileAnnotations(path: rawFile.path, annotations: document)
+            let saved = try await api.saveFileAnnotations(path: rawFile.path, annotations: document.syncedNoteElementsFromLegacy())
             guard !Task.isCancelled else { return }
-            annotations = saved
+            annotations = saved.syncedNoteElementsFromLegacy()
             statusText = "Saved"
         } catch {
             guard !Task.isCancelled else { return }
@@ -3575,7 +3578,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         }
 
         private func appendLocalStroke(pageIndex: Int, stroke: CodmesInkStroke) {
-            var next = annotations ?? PDFAnnotationDocument(schemaVersion: 1, documentPath: "", updatedAt: nil, pages: [], objects: [])
+            var next = annotations ?? PDFAnnotationDocument(schemaVersion: 2, documentPath: "", updatedAt: nil, pages: [], objects: [])
             if let index = next.pages.firstIndex(where: { $0.pageIndex == pageIndex }) {
                 var strokes = next.pages[index].inkStrokes ?? []
                 if !strokes.contains(where: { $0.id == stroke.id }) {
@@ -3586,6 +3589,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 next.pages.append(PDFAnnotationPage(pageIndex: pageIndex, inkDataBase64: nil, inkStrokes: [stroke], objects: []))
                 next.pages.sort { $0.pageIndex < $1.pageIndex }
             }
+            next.syncNoteElementsFromLegacy()
             annotations = next
         }
 
@@ -3603,18 +3607,19 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         }
 
         private func replaceLocalStrokes(pageIndex: Int, movedStrokes: [CodmesInkStroke], selectedIds: Set<String>) {
-            var next = annotations ?? PDFAnnotationDocument(schemaVersion: 1, documentPath: "", updatedAt: nil, pages: [], objects: [])
+            var next = annotations ?? PDFAnnotationDocument(schemaVersion: 2, documentPath: "", updatedAt: nil, pages: [], objects: [])
             let movedById = Dictionary(uniqueKeysWithValues: movedStrokes.map { ($0.id, $0) })
             if let index = next.pages.firstIndex(where: { $0.pageIndex == pageIndex }) {
                 let current = next.pages[index].inkStrokes ?? []
                 next.pages[index].inkStrokes = current.map { selectedIds.contains($0.id) ? (movedById[$0.id] ?? $0) : $0 }
             }
+            next.syncNoteElementsFromLegacy()
             annotations = next
         }
 
         private func replaceLocalObjects(_ movedObjects: [PDFAnnotationObject]) {
             guard !movedObjects.isEmpty else { return }
-            var next = annotations ?? PDFAnnotationDocument(schemaVersion: 1, documentPath: "", updatedAt: nil, pages: [], objects: [])
+            var next = annotations ?? PDFAnnotationDocument(schemaVersion: 2, documentPath: "", updatedAt: nil, pages: [], objects: [])
             let movedById = Dictionary(uniqueKeysWithValues: movedObjects.map { ($0.id, $0) })
             for pageIndex in next.pages.indices {
                 guard var objects = next.pages[pageIndex].objects else { continue }
@@ -3622,6 +3627,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 next.pages[pageIndex].objects = objects
             }
             next.objects = next.objects.map { movedById[$0.id] ?? $0 }
+            next.syncNoteElementsFromLegacy()
             annotations = next
         }
 
@@ -4308,6 +4314,13 @@ private extension PDFAnnotationDocument {
                 nextObject.pageIndex = mappedIndex
                 return nextObject
             }
+            copy.elements = copy.elements?.compactMap { element in
+                var nextElement = element
+                let sourcePageIndex = element.pageIndex
+                guard let elementMappedIndex = mapping[sourcePageIndex] else { return nil }
+                nextElement.pageIndex = elementMappedIndex
+                return nextElement
+            }
             nextPages.append(copy)
         }
         var nextObjects: [PDFAnnotationObject] = []
@@ -4317,13 +4330,23 @@ private extension PDFAnnotationDocument {
             copy.pageIndex = mappedIndex
             nextObjects.append(copy)
         }
-        return PDFAnnotationDocument(
+        var nextElements: [CodmesNoteElement] = []
+        for element in elements ?? [] {
+            guard let mappedIndex = mapping[element.pageIndex] else { continue }
+            var copy = element
+            copy.pageIndex = mappedIndex
+            nextElements.append(copy)
+        }
+        var document = PDFAnnotationDocument(
             schemaVersion: schemaVersion,
             documentPath: documentPath,
             updatedAt: ISO8601DateFormatter().string(from: Date()),
             pages: nextPages.sorted { $0.pageIndex < $1.pageIndex },
             objects: nextObjects
         )
+        document.elements = nextElements
+        document.syncNoteElementsFromLegacy()
+        return document
     }
 
     func inserting(_ imported: PDFAnnotationDocument?, at insertAt: Int, insertedPageCount: Int, documentPath: String) -> PDFAnnotationDocument {
@@ -4339,12 +4362,26 @@ private extension PDFAnnotationDocument {
                 }
                 return nextObject
             }
+            copy.elements = copy.elements?.map { element in
+                var nextElement = element
+                if nextElement.pageIndex >= insertAt {
+                    nextElement.pageIndex += insertedPageCount
+                }
+                return nextElement
+            }
             return copy
         }
         var nextObjects = objects.map { object in
             var copy = object
             if let pageIndex = copy.pageIndex, pageIndex >= insertAt {
                 copy.pageIndex = pageIndex + insertedPageCount
+            }
+            return copy
+        }
+        var nextElements = (elements ?? []).map { element in
+            var copy = element
+            if copy.pageIndex >= insertAt {
+                copy.pageIndex += insertedPageCount
             }
             return copy
         }
@@ -4359,6 +4396,16 @@ private extension PDFAnnotationDocument {
                     nextObject.pageIndex = insertAt + (object.pageIndex ?? page.pageIndex)
                     return nextObject
                 }
+                copy.elements = copy.elements?.map { element in
+                    var nextElement = element
+                    nextElement.id = UUID().uuidString
+                    nextElement.pageIndex = insertAt + element.pageIndex
+                    if var stroke = nextElement.stroke {
+                        stroke.id = nextElement.id
+                        nextElement.stroke = stroke
+                    }
+                    return nextElement
+                }
                 nextPages.append(copy)
             }
             for object in imported.objects {
@@ -4367,15 +4414,28 @@ private extension PDFAnnotationDocument {
                 copy.pageIndex = insertAt + (object.pageIndex ?? 0)
                 nextObjects.append(copy)
             }
+            for element in imported.elements ?? [] {
+                var copy = element
+                copy.id = UUID().uuidString
+                copy.pageIndex = insertAt + element.pageIndex
+                if var stroke = copy.stroke {
+                    stroke.id = copy.id
+                    copy.stroke = stroke
+                }
+                nextElements.append(copy)
+            }
         }
 
-        return PDFAnnotationDocument(
+        var document = PDFAnnotationDocument(
             schemaVersion: schemaVersion,
             documentPath: documentPath,
             updatedAt: ISO8601DateFormatter().string(from: Date()),
             pages: nextPages.sorted { $0.pageIndex < $1.pageIndex },
             objects: nextObjects
         )
+        document.elements = nextElements
+        document.syncNoteElementsFromLegacy()
+        return document
     }
 }
 

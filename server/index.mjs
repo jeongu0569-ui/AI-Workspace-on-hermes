@@ -1247,21 +1247,23 @@ async function migrateLegacyAnnotations(relativePath) {
 
 function emptyAnnotations(relativePath) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     documentPath: relativePath,
     updatedAt: null,
     pages: [],
-    objects: []
+    objects: [],
+    elements: []
   };
 }
 
 function normalizeAnnotations(relativePath, body) {
   return {
-    schemaVersion: Number.isSafeInteger(body.schemaVersion) ? body.schemaVersion : 1,
+    schemaVersion: Number.isSafeInteger(body.schemaVersion) ? Math.max(body.schemaVersion, 2) : 2,
     documentPath: relativePath,
     updatedAt: new Date().toISOString(),
     pages: Array.isArray(body.pages) ? body.pages : [],
-    objects: Array.isArray(body.objects) ? body.objects : []
+    objects: Array.isArray(body.objects) ? body.objects : [],
+    elements: Array.isArray(body.elements) ? body.elements : []
   };
 }
 
