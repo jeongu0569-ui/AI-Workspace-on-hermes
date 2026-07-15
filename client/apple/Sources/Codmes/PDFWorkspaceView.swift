@@ -2612,7 +2612,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             if roundStroke, ellipseScore < 0.42 {
                 return ShapeFit(kind: "ellipse", points: ellipse)
             }
-            if closedDistance / diagonal > 0.62, angularStroke {
+            if openPolylineIntent(points: points, diagonal: diagonal, angularStroke: angularStroke) {
                 return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
             }
             if let triangle = strokePreservingTriangleCandidate(from: points, diagonal: diagonal) {
@@ -2628,41 +2628,10 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             if let gapTriangle = openGapTriangleCandidate(from: points, diagonal: diagonal) {
                 return gapTriangle
             }
-            if let openTriangle = openTriangleCandidate(from: points, diagonal: diagonal) {
-                return openTriangle
-            }
             if let closedTriangle = closedStrokeTriangleCandidate(from: points, diagonal: diagonal) {
                 return closedTriangle
             }
             return roughStrokeTriangleCandidate(from: points, diagonal: diagonal)
-        }
-
-        private func openTriangleCandidate(from points: [CGPoint], diagonal: CGFloat) -> ShapeFit? {
-            guard points.count > 5 else { return nil }
-            guard angularStrokeIntent(points, diagonal: diagonal) else { return nil }
-            let start = points[0]
-            let end = points[points.count - 1]
-            let baseLength = distance(start, end)
-            guard baseLength / diagonal > 0.22 else { return nil }
-
-            var bestIndex = 0
-            var bestDistance: CGFloat = 0
-            for index in points.indices.dropFirst().dropLast() {
-                let candidateDistance = distance(points[index], toSegmentStart: start, end: end)
-                if candidateDistance > bestDistance {
-                    bestDistance = candidateDistance
-                    bestIndex = index
-                }
-            }
-            guard bestDistance / diagonal > 0.18 else { return nil }
-            let apex = points[bestIndex]
-            guard distance(start, apex) / diagonal > 0.2,
-                  distance(apex, end) / diagonal > 0.2 else { return nil }
-
-            let triangle = [start, apex, end, start]
-            let score = polylineError(points, candidate: triangle) / diagonal
-            guard score < 0.42 else { return nil }
-            return ShapeFit(kind: "triangle", points: triangle)
         }
 
         private func openGapTriangleCandidate(from points: [CGPoint], diagonal: CGFloat) -> ShapeFit? {
@@ -2726,7 +2695,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
 
         private func roughStrokeTriangleCandidate(from points: [CGPoint], diagonal: CGFloat) -> ShapeFit? {
             guard angularStrokeIntent(points, diagonal: diagonal) else { return nil }
-            guard distance(points[0], points[points.count - 1]) / diagonal < 0.58 else { return nil }
+            guard distance(points[0], points[points.count - 1]) / diagonal < 0.34 else { return nil }
             let epsilons: [CGFloat] = [0.025, 0.035, 0.045, 0.06, 0.08, 0.105]
             var best: (fit: ShapeFit, score: CGFloat)?
 
@@ -2781,6 +2750,16 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             return sharpTurns >= 2
         }
 
+        private func openPolylineIntent(points: [CGPoint], diagonal: CGFloat, angularStroke: Bool) -> Bool {
+            let endpointGap = distance(points[0], points[points.count - 1]) / diagonal
+            guard endpointGap > 0.26 else { return false }
+            if angularStroke {
+                return true
+            }
+            let simplified = deduplicatedVertices(simplify(points, epsilon: max(diagonal * 0.035, 4)), diagonal: diagonal)
+            return simplified.count >= 3 && simplified.count <= 8
+        }
+
         private func closedRoundIntent(
             points: [CGPoint],
             diagonal: CGFloat,
@@ -2790,11 +2769,11 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             angularStroke: Bool
         ) -> Bool {
             let endpointGap = distance(points[0], points[points.count - 1]) / diagonal
-            guard endpointGap < 0.38,
-                  angleCoverage > 0.62,
-                  circularityScore > 0.46,
-                  circleScore < 0.38 else { return false }
-            if angularStroke, circularityScore < 0.66 {
+            guard endpointGap < 0.5,
+                  angleCoverage > 0.55,
+                  circularityScore > 0.38,
+                  circleScore < 0.46 else { return false }
+            if angularStroke, circularityScore < 0.58 {
                 return false
             }
             return true
