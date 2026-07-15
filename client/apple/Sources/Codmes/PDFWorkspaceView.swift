@@ -2061,6 +2061,20 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             var handleIndex: Int
         }
 
+        private struct EllipseGeometry {
+            var center: CGPoint
+            var rx: CGFloat
+            var ry: CGFloat
+            var angle: CGFloat
+        }
+
+        private struct NormalizedEllipseGeometry {
+            var center: CodmesInkPoint
+            var rx: Double
+            var ry: Double
+            var angle: Double
+        }
+
         weak var pdfView: AnnotatedPDFView?
         weak var drawingGesture: UIPanGestureRecognizer?
         weak var clearSelectionTapGesture: UITapGestureRecognizer?
@@ -2634,14 +2648,9 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 let radius = max(distance(center, point), 1)
                 return ShapeFit(kind: fit.kind, points: circlePoints(center: center, radius: radius, count: 48))
             case "ellipse":
-                guard let bounds = pointBounds(fit.points) else { return fit }
-                let center = CGPoint(x: bounds.midX, y: bounds.midY)
-                let currentHandle = shapeHandlePoints(for: fit).first(where: { $0.index == index })?.point ?? CGPoint(x: bounds.maxX, y: bounds.midY)
-                let currentDistance = max(distance(center, currentHandle), 1)
-                let nextDistance = max(distance(center, point), 1)
-                let scale = nextDistance / currentDistance
-                let angle = atan2(point.y - center.y, point.x - center.x)
-                return ShapeFit(kind: fit.kind, points: ellipsePoints(center: center, rx: max(bounds.width / 2 * scale, 1), ry: max(bounds.height / 2 * scale, 1), angle: angle, count: 48))
+                guard let geometry = ellipseGeometry(from: fit.points) else { return fit }
+                let adjusted = adjustedEllipseGeometry(geometry, handleIndex: index, to: point)
+                return ShapeFit(kind: fit.kind, points: ellipsePoints(center: adjusted.center, rx: adjusted.rx, ry: adjusted.ry, angle: adjusted.angle, count: 48))
             default:
                 return fit
             }
@@ -2659,7 +2668,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return fit.points.prefix(4).enumerated().map { (index: $0.offset, point: $0.element) }
             case "triangle":
                 return fit.points.prefix(3).enumerated().map { (index: $0.offset, point: $0.element) }
-            case "circle", "ellipse":
+            case "circle":
                 guard let bounds = pointBounds(fit.points) else { return [] }
                 return [
                     (0, CGPoint(x: bounds.midX, y: bounds.minY)),
@@ -2667,9 +2676,88 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     (2, CGPoint(x: bounds.midX, y: bounds.maxY)),
                     (3, CGPoint(x: bounds.minX, y: bounds.midY))
                 ]
+            case "ellipse":
+                guard let geometry = ellipseGeometry(from: fit.points) else { return [] }
+                return ellipseHandlePoints(for: geometry)
             default:
                 return []
             }
+        }
+
+        private func ellipseGeometry(from points: [CGPoint]) -> EllipseGeometry? {
+            let source = openShapePoints(points)
+            guard source.count >= 6 else { return nil }
+            let center = source.reduce(CGPoint.zero) { partial, point in
+                CGPoint(x: partial.x + point.x, y: partial.y + point.y)
+            }
+            let normalizedCenter = CGPoint(
+                x: center.x / CGFloat(source.count),
+                y: center.y / CGFloat(source.count)
+            )
+            var xx: CGFloat = 0
+            var xy: CGFloat = 0
+            var yy: CGFloat = 0
+            for point in source {
+                let dx = point.x - normalizedCenter.x
+                let dy = point.y - normalizedCenter.y
+                xx += dx * dx
+                xy += dx * dy
+                yy += dy * dy
+            }
+            var angle = 0.5 * atan2(2 * xy, xx - yy)
+            let cosA = cos(angle)
+            let sinA = sin(angle)
+            var rx: CGFloat = 1
+            var ry: CGFloat = 1
+            for point in source {
+                let dx = point.x - normalizedCenter.x
+                let dy = point.y - normalizedCenter.y
+                rx = max(rx, abs(dx * cosA + dy * sinA))
+                ry = max(ry, abs(-dx * sinA + dy * cosA))
+            }
+            if ry > rx {
+                swap(&rx, &ry)
+                angle += .pi / 2
+            }
+            return EllipseGeometry(center: normalizedCenter, rx: max(rx, 1), ry: max(ry, 1), angle: angle)
+        }
+
+        private func adjustedEllipseGeometry(_ geometry: EllipseGeometry, handleIndex: Int, to point: CGPoint) -> EllipseGeometry {
+            let dx = point.x - geometry.center.x
+            let dy = point.y - geometry.center.y
+            let distanceFromCenter = max(hypot(dx, dy), 1)
+            let ratio = max(geometry.rx / max(geometry.ry, 1), 1.05)
+            switch handleIndex {
+            case 0:
+                return EllipseGeometry(center: geometry.center, rx: distanceFromCenter * ratio, ry: distanceFromCenter, angle: atan2(dy, dx) + .pi / 2)
+            case 2:
+                return EllipseGeometry(center: geometry.center, rx: distanceFromCenter * ratio, ry: distanceFromCenter, angle: atan2(dy, dx) - .pi / 2)
+            case 3:
+                return EllipseGeometry(center: geometry.center, rx: distanceFromCenter, ry: distanceFromCenter / ratio, angle: atan2(dy, dx) + .pi)
+            default:
+                return EllipseGeometry(center: geometry.center, rx: distanceFromCenter, ry: distanceFromCenter / ratio, angle: atan2(dy, dx))
+            }
+        }
+
+        private func ellipseHandlePoints(for geometry: EllipseGeometry) -> [(index: Int, point: CGPoint)] {
+            let cosA = cos(geometry.angle)
+            let sinA = sin(geometry.angle)
+            let major = CGVector(dx: cosA * geometry.rx, dy: sinA * geometry.rx)
+            let minor = CGVector(dx: -sinA * geometry.ry, dy: cosA * geometry.ry)
+            return [
+                (0, CGPoint(x: geometry.center.x - minor.dx, y: geometry.center.y - minor.dy)),
+                (1, CGPoint(x: geometry.center.x + major.dx, y: geometry.center.y + major.dy)),
+                (2, CGPoint(x: geometry.center.x + minor.dx, y: geometry.center.y + minor.dy)),
+                (3, CGPoint(x: geometry.center.x - major.dx, y: geometry.center.y - major.dy))
+            ]
+        }
+
+        private func openShapePoints(_ points: [CGPoint]) -> [CGPoint] {
+            guard points.count > 2,
+                  let first = points.first,
+                  let last = points.last,
+                  distance(first, last) < 0.5 else { return points }
+            return Array(points.dropLast())
         }
 
         private func fitShape(from points: [CGPoint]) -> ShapeFit? {
@@ -3681,7 +3769,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return stroke.points.prefix(4).enumerated().map { ($0.offset, viewPoint($0.element)) }
             case "triangle":
                 return stroke.points.prefix(3).enumerated().map { ($0.offset, viewPoint($0.element)) }
-            case "circle", "ellipse":
+            case "circle":
                 guard let box = normalizedBounds(for: stroke.points) else { return [] }
                 return [
                     (0, CGPoint(x: bounds.width * (box.x + box.width / 2), y: bounds.height * box.y)),
@@ -3689,6 +3777,9 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     (2, CGPoint(x: bounds.width * (box.x + box.width / 2), y: bounds.height * (box.y + box.height))),
                     (3, CGPoint(x: bounds.width * box.x, y: bounds.height * (box.y + box.height / 2)))
                 ]
+            case "ellipse":
+                guard let geometry = normalizedEllipseGeometry(from: stroke.points) else { return [] }
+                return normalizedEllipseHandlePoints(for: geometry, in: bounds)
             default:
                 return []
             }
@@ -3813,22 +3904,9 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 let radius = max(abs(point.x - center.x), abs(point.y - center.y), 0.005)
                 next.points = circlePoints(center: center, radius: radius, count: 48)
             case "ellipse":
-                guard let box = normalizedBounds(for: next.points) else { return next }
-                var minX = box.x
-                var maxX = box.x + box.width
-                var minY = box.y
-                var maxY = box.y + box.height
-                switch handleIndex {
-                case 0:
-                    minY = point.y
-                case 1:
-                    maxX = point.x
-                case 2:
-                    maxY = point.y
-                default:
-                    minX = point.x
-                }
-                next.points = ellipsePoints(in: normalizedBox(minX: minX, minY: minY, maxX: maxX, maxY: maxY), count: 48)
+                guard let geometry = normalizedEllipseGeometry(from: next.points) else { return next }
+                let adjusted = adjustedNormalizedEllipseGeometry(geometry, handleIndex: handleIndex, to: point)
+                next.points = ellipsePoints(center: adjusted.center, rx: adjusted.rx, ry: adjusted.ry, angle: adjusted.angle, count: 48)
             default:
                 break
             }
@@ -3863,6 +3941,85 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             )
         }
 
+        private func normalizedEllipseGeometry(from points: [CodmesInkPoint]) -> NormalizedEllipseGeometry? {
+            let source = openShapePoints(points)
+            guard source.count >= 6 else { return nil }
+            let centerX = source.reduce(0) { $0 + $1.x } / Double(source.count)
+            let centerY = source.reduce(0) { $0 + $1.y } / Double(source.count)
+            var xx = 0.0
+            var xy = 0.0
+            var yy = 0.0
+            for point in source {
+                let dx = point.x - centerX
+                let dy = point.y - centerY
+                xx += dx * dx
+                xy += dx * dy
+                yy += dy * dy
+            }
+            var angle = 0.5 * atan2(2 * xy, xx - yy)
+            let cosA = cos(angle)
+            let sinA = sin(angle)
+            var rx = 0.005
+            var ry = 0.005
+            for point in source {
+                let dx = point.x - centerX
+                let dy = point.y - centerY
+                rx = max(rx, abs(dx * cosA + dy * sinA))
+                ry = max(ry, abs(-dx * sinA + dy * cosA))
+            }
+            if ry > rx {
+                swap(&rx, &ry)
+                angle += Double.pi / 2
+            }
+            return NormalizedEllipseGeometry(
+                center: CodmesInkPoint(x: centerX, y: centerY, pressure: nil, timeOffset: nil),
+                rx: max(rx, 0.005),
+                ry: max(ry, 0.005),
+                angle: angle
+            )
+        }
+
+        private func adjustedNormalizedEllipseGeometry(_ geometry: NormalizedEllipseGeometry, handleIndex: Int, to point: CodmesInkPoint) -> NormalizedEllipseGeometry {
+            let dx = point.x - geometry.center.x
+            let dy = point.y - geometry.center.y
+            let distanceFromCenter = max(hypot(dx, dy), 0.005)
+            let ratio = max(geometry.rx / max(geometry.ry, 0.005), 1.05)
+            switch handleIndex {
+            case 0:
+                return NormalizedEllipseGeometry(center: geometry.center, rx: distanceFromCenter * ratio, ry: distanceFromCenter, angle: atan2(dy, dx) + Double.pi / 2)
+            case 2:
+                return NormalizedEllipseGeometry(center: geometry.center, rx: distanceFromCenter * ratio, ry: distanceFromCenter, angle: atan2(dy, dx) - Double.pi / 2)
+            case 3:
+                return NormalizedEllipseGeometry(center: geometry.center, rx: distanceFromCenter, ry: distanceFromCenter / ratio, angle: atan2(dy, dx) + Double.pi)
+            default:
+                return NormalizedEllipseGeometry(center: geometry.center, rx: distanceFromCenter, ry: distanceFromCenter / ratio, angle: atan2(dy, dx))
+            }
+        }
+
+        private func normalizedEllipseHandlePoints(for geometry: NormalizedEllipseGeometry, in bounds: CGRect) -> [(Int, CGPoint)] {
+            let cosA = cos(geometry.angle)
+            let sinA = sin(geometry.angle)
+            let major = (x: cosA * geometry.rx, y: sinA * geometry.rx)
+            let minor = (x: -sinA * geometry.ry, y: cosA * geometry.ry)
+            let handles = [
+                (0, geometry.center.x - minor.x, geometry.center.y - minor.y),
+                (1, geometry.center.x + major.x, geometry.center.y + major.y),
+                (2, geometry.center.x + minor.x, geometry.center.y + minor.y),
+                (3, geometry.center.x - major.x, geometry.center.y - major.y)
+            ]
+            return handles.map { index, x, y in
+                (index, CGPoint(x: bounds.width * x, y: bounds.height * y))
+            }
+        }
+
+        private func openShapePoints(_ points: [CodmesInkPoint]) -> [CodmesInkPoint] {
+            guard points.count > 2,
+                  let first = points.first,
+                  let last = points.last,
+                  hypot(first.x - last.x, first.y - last.y) < 0.0001 else { return points }
+            return Array(points.dropLast())
+        }
+
         private func rectanglePoints(from point: CodmesInkPoint, to opposite: CodmesInkPoint) -> [CodmesInkPoint] {
             let box = normalizedBox(minX: point.x, minY: point.y, maxX: opposite.x, maxY: opposite.y)
             let topLeft = CodmesInkPoint(x: box.x, y: box.y, pressure: nil, timeOffset: nil)
@@ -3895,6 +4052,23 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return CodmesInkPoint(
                     x: centerX + cos(angle) * rx,
                     y: centerY + sin(angle) * ry,
+                    pressure: nil,
+                    timeOffset: nil
+                )
+            }
+        }
+
+        private func ellipsePoints(center: CodmesInkPoint, rx: Double, ry: Double, angle: Double, count: Int) -> [CodmesInkPoint] {
+            let maxRadius = max(0.005, min(center.x, 1 - center.x, center.y, 1 - center.y))
+            let clampedRX = min(max(rx, 0.005), maxRadius)
+            let clampedRY = min(max(ry, 0.005), maxRadius)
+            return (0...count).map { index in
+                let theta = Double(index) / Double(count) * Double.pi * 2
+                let x = cos(theta) * clampedRX
+                let y = sin(theta) * clampedRY
+                return CodmesInkPoint(
+                    x: center.x + x * cos(angle) - y * sin(angle),
+                    y: center.y + x * sin(angle) + y * cos(angle),
                     pressure: nil,
                     timeOffset: nil
                 )
