@@ -1868,6 +1868,12 @@ fileprivate final class PDFPageAnnotationOverlay: UIView {
         shapePreviewLayer.lineCap = .round
         shapePreviewLayer.lineJoin = .round
         layer.addSublayer(shapePreviewLayer)
+        shapePreviewLayer.actions = [
+            "path": NSNull(),
+            "position": NSNull(),
+            "bounds": NSNull(),
+            "opacity": NSNull()
+        ]
         selectionOutlineLayer.fillColor = UIColor.clear.cgColor
         selectionOutlineLayer.strokeColor = UIColor.systemOrange.cgColor
         selectionOutlineLayer.lineWidth = 1.5
@@ -2135,6 +2141,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         private var lastShapeRecognitionDebug: ShapeRecognitionDebug?
         private var activeShapeDragHandleIndex: Int?
         private var activeShapeHandleDrag: ShapeHandleDrag?
+        private var activeShapeHandleStartStroke: CodmesInkStroke?
         private var lastPenPointTime: TimeInterval = 0
         private var lastPenOverlayPoint: CGPoint?
         private var lassoInteraction: LassoInteraction?
@@ -2337,6 +2344,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 guard let page = document.page(at: pageIndex) else { continue }
                 let strokes = annotations.noteStrokes(pageIndex: pageIndex)
                 let hiddenStrokeIds = movingLassoStrokeIds(pageIndex: pageIndex)
+                    .union(activeShapeHandleStrokeIds(pageIndex: pageIndex))
                 for stroke in strokes {
                     guard !hiddenStrokeIds.contains(stroke.id) else { continue }
                     addInkPreview(stroke, to: page, contentsPrefix: "codmes-ink-preview")
@@ -2348,6 +2356,12 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             guard lassoInteraction == .moving,
                   lassoMoveStartSelection?.pageIndex == pageIndex else { return [] }
             return lassoMoveStartSelection?.strokeIds ?? []
+        }
+
+        private func activeShapeHandleStrokeIds(pageIndex: Int) -> Set<String> {
+            guard let drag = activeShapeHandleDrag,
+                  drag.pageIndex == pageIndex else { return [] }
+            return [drag.strokeId]
         }
 
         private func removeCodmesInkAnnotation(id: String, from page: PDFPage) {
@@ -2377,7 +2391,9 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     pdfView.drawingOverlay.cancel()
                     if let overlay = overlays[pageIndex],
                        let stroke = strokes(for: pageIndex).first(where: { $0.id == handleDrag.strokeId }) {
+                        activeShapeHandleStartStroke = stroke
                         removeCodmesInkAnnotation(id: stroke.id, from: page)
+                        clearShapeHandles(in: overlay)
                         updateShapeLayerPreview(stroke, in: overlay)
                     }
                     return
@@ -2462,6 +2478,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     activeShapeFit = nil
                     activeShapeDragHandleIndex = nil
                     activeShapeHandleDrag = nil
+                    activeShapeHandleStartStroke = nil
                     lastPenOverlayPoint = nil
                     lassoInteraction = nil
                     lassoMoveStartSelection = nil
@@ -2525,6 +2542,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 activeShapeFit = nil
                 activeShapeDragHandleIndex = nil
                 activeShapeHandleDrag = nil
+                activeShapeHandleStartStroke = nil
                 lastPenOverlayPoint = nil
                 lassoInteraction = nil
                 lassoMoveStartSelection = nil
@@ -3765,6 +3783,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
 
             guard isWritingMode,
                   lassoInteraction != .moving,
+                  activeShapeHandleDrag == nil,
                   let selected = selectedShapeStroke(pageIndex: pageIndex) else { return }
             let stroke = selected.stroke
             let kind = selected.kind
@@ -3945,7 +3964,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         private func updateShapeHandleDrag(_ drag: ShapeHandleDrag, to viewPoint: CGPoint, commit: Bool) {
             guard let pdfView,
                   let overlay = overlays[drag.pageIndex],
-                  var stroke = strokes(for: drag.pageIndex).first(where: { $0.id == drag.strokeId }) else { return }
+                  var stroke = activeShapeHandleStartStroke ?? strokes(for: drag.pageIndex).first(where: { $0.id == drag.strokeId }) else { return }
             let location = overlay.convert(viewPoint, from: pdfView)
             let normalized = CodmesInkPoint(
                 x: Double(max(0, min(overlay.bounds.width, location.x)) / max(overlay.bounds.width, 1)),
@@ -3954,7 +3973,6 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 timeOffset: nil
             )
             stroke = updateShapeStroke(stroke, kind: drag.kind, handleIndex: drag.handleIndex, to: normalized)
-            replaceLocalStrokes(pageIndex: drag.pageIndex, movedStrokes: [stroke], selectedIds: [stroke.id])
             if let nextBounds = bounds(for: stroke.points) {
                 lassoSelection = LassoSelection(
                     pageIndex: drag.pageIndex,
@@ -3964,13 +3982,14 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     outline: []
                 )
             }
-            if let handle = overlay.shapeHandleViews.compactMap({ $0 as? PDFShapeHandleView }).first(where: { $0.strokeId == drag.strokeId && $0.handleIndex == drag.handleIndex }) {
-                handle.center = location
-            }
+            clearShapeHandles(in: overlay)
             updateShapeLayerPreview(stroke, in: overlay)
 
             if commit {
+                replaceLocalStrokes(pageIndex: drag.pageIndex, movedStrokes: [stroke], selectedIds: [stroke.id])
                 overlay.shapePreviewLayer.path = nil
+                activeShapeHandleDrag = nil
+                activeShapeHandleStartStroke = nil
                 notifyLassoSelectionChanged()
                 onStrokesChanged(drag.pageIndex, strokes(for: drag.pageIndex))
                 applyCodmesInkAnnotations()
@@ -3987,7 +4006,13 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
 
             if gesture.state == .began,
                let page = pdfView.document?.page(at: selection.pageIndex) {
+                let drag = ShapeHandleDrag(pageIndex: selection.pageIndex, strokeId: handle.strokeId, kind: handle.kind, handleIndex: handle.handleIndex)
+                activeShapeHandleDrag = drag
+                activeShapeHandleStartStroke = strokes(for: selection.pageIndex).first(where: { $0.id == handle.strokeId })
                 removeCodmesInkAnnotation(id: handle.strokeId, from: page)
+                if let overlay = overlays[selection.pageIndex] {
+                    clearShapeHandles(in: overlay)
+                }
             }
             let drag = ShapeHandleDrag(pageIndex: selection.pageIndex, strokeId: handle.strokeId, kind: handle.kind, handleIndex: handle.handleIndex)
             updateShapeHandleDrag(drag, to: gesture.location(in: pdfView), commit: gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed)
