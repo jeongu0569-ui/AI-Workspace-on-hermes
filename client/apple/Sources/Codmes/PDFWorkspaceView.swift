@@ -2775,11 +2775,12 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 }
                 .sorted { $0.score < $1.score }
 
-            if let triangle = openGapTriangleCandidate(from: points, diagonal: diagonal) ?? bestTriangleCandidate(from: points, diagonal: diagonal)?.fit,
+            let triangleCandidate = bestTriangleFit(from: points, bounds: bounds, diagonal: diagonal)
+            if let triangle = triangleCandidate?.fit,
                let triangleScore = scored.first(where: { $0.fit.kind == "triangle" })?.score,
                let rectangleScore = scored.first(where: { $0.fit.kind == "rectangle" })?.score,
-               triangleScore <= rectangleScore + 0.12,
-               triangleScore < 0.48 {
+               triangleScore <= rectangleScore + 0.24,
+               triangleScore < 0.62 {
                 lastShapeRecognitionDebug = shapeDebug(selected: "triangle", reason: "triangle-guard", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: scored)
                 return triangle
             }
@@ -2798,13 +2799,21 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 lastShapeRecognitionDebug = shapeDebug(selected: "polyline", reason: "template", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: scored)
                 return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
             case "triangle":
-                if let triangle = bestTriangleCandidate(from: points, diagonal: diagonal)?.fit {
+                if let triangle = triangleCandidate?.fit {
                     lastShapeRecognitionDebug = shapeDebug(selected: "triangle", reason: "template", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: scored)
                     return triangle
                 }
                 lastShapeRecognitionDebug = shapeDebug(selected: "triangle", reason: "template-fallback", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: scored)
                 return fallbackTriangle(from: points, bounds: bounds, diagonal: diagonal)
             case "rectangle":
+                if let triangle = triangleCandidate,
+                   triangle.score < 0.34,
+                   let triangleScore = scored.first(where: { $0.fit.kind == "triangle" })?.score,
+                   let rectangleScore = scored.first(where: { $0.fit.kind == "rectangle" })?.score,
+                   triangleScore <= rectangleScore + 0.32 {
+                    lastShapeRecognitionDebug = shapeDebug(selected: "triangle", reason: "rectangle-veto", points: points, diagonal: diagonal, endpointGap: endpointGap, candidates: scored)
+                    return triangle.fit
+                }
                 if let rectangle = closedPolygonCandidates(from: points, diagonal: diagonal)
                     .filter({ $0.fit.kind == "rectangle" })
                     .min(by: { $0.score < $1.score })?.fit {
@@ -3019,7 +3028,9 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 result.append(ShapeCandidate(fit: ShapeFit(kind: kind, points: polygon), score: score))
             }
 
-            if let bounds = pointBounds(points), bounds.width > 8, bounds.height > 8 {
+            let dominantVertices = deduplicatedVertices(simplify(points, epsilon: max(diagonal * 0.045, 4)), diagonal: diagonal)
+            if dominantVertices.count >= 4,
+               let bounds = pointBounds(points), bounds.width > 8, bounds.height > 8 {
                 let rectangle = [
                     CGPoint(x: bounds.minX, y: bounds.minY),
                     CGPoint(x: bounds.maxX, y: bounds.minY),
@@ -3029,7 +3040,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 ]
                 let score = polylineError(points, candidate: rectangle) / diagonal
                     + max(0, endpointGap - 0.2) * 0.16
-                    + 0.055
+                    + (dominantVertices.count == 4 ? 0.055 : 0.14)
                 result.append(ShapeCandidate(fit: ShapeFit(kind: "rectangle", points: rectangle), score: score))
             }
 
@@ -3222,6 +3233,20 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 }
             }
             return best
+        }
+
+        private func bestTriangleFit(from points: [CGPoint], bounds: CGRect, diagonal: CGFloat) -> (fit: ShapeFit, score: CGFloat)? {
+            var candidates: [(fit: ShapeFit, score: CGFloat)] = []
+            if let openTriangle = openGapTriangleCandidate(from: points, diagonal: diagonal) {
+                candidates.append((openTriangle, polylineError(points, candidate: openTriangle.points) / diagonal * 0.72))
+            }
+            if let triangle = bestTriangleCandidate(from: points, diagonal: diagonal) {
+                candidates.append(triangle)
+            }
+            if let fallback = fallbackTriangle(from: points, bounds: bounds, diagonal: diagonal) {
+                candidates.append((fallback, polylineError(points, candidate: fallback.points) / diagonal * 0.9))
+            }
+            return candidates.min(by: { $0.score < $1.score })
         }
 
         private func fallbackTriangle(from points: [CGPoint], bounds: CGRect, diagonal: CGFloat) -> ShapeFit? {
