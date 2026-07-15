@@ -2027,6 +2027,12 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             var score: CGFloat
         }
 
+        private struct ShapeTemplate {
+            var kind: String
+            var points: [CGPoint]
+            var isClosed: Bool
+        }
+
         private struct ShapeHandleDrag {
             var pageIndex: Int
             var strokeId: String
@@ -2640,6 +2646,10 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             guard diagonal > 20 else { return nil }
 
             let endpointGap = distance(points[0], points[points.count - 1]) / diagonal
+            if let templateFit = templateRecognizedShape(from: points, bounds: bounds, diagonal: diagonal, endpointGap: endpointGap) {
+                return templateFit
+            }
+
             var candidates: [ShapeCandidate] = []
 
             if endpointGap > 0.22 {
@@ -2677,6 +2687,162 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             }
 
             return nil
+        }
+
+        private func templateRecognizedShape(from points: [CGPoint], bounds: CGRect, diagonal: CGFloat, endpointGap: CGFloat) -> ShapeFit? {
+            let isClosed = endpointGap < 0.55
+            guard let normalized = normalizedGesture(points, count: 64) else { return nil }
+            let templates = shapeTemplates(includeClosed: isClosed)
+            guard !templates.isEmpty else { return nil }
+
+            let scored = templates
+                .map { template in
+                    ShapeCandidate(
+                        fit: ShapeFit(kind: template.kind, points: []),
+                        score: templateDistance(normalized, template.points)
+                            + templateFeaturePenalty(kind: template.kind, points: points, bounds: bounds, diagonal: diagonal, endpointGap: endpointGap)
+                    )
+                }
+                .sorted { $0.score < $1.score }
+
+            guard let best = scored.first,
+                  best.score < 0.34 else { return nil }
+
+            switch best.fit.kind {
+            case "line":
+                return ShapeFit(kind: "line", points: [points[0], points[points.count - 1]])
+            case "polyline":
+                return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
+            case "triangle":
+                if let triangle = bestTriangleCandidate(from: points, diagonal: diagonal)?.fit {
+                    return triangle
+                }
+                return fallbackTriangle(from: points, bounds: bounds, diagonal: diagonal)
+            case "rectangle":
+                if let rectangle = closedPolygonCandidates(from: points, diagonal: diagonal)
+                    .filter({ $0.fit.kind == "rectangle" })
+                    .min(by: { $0.score < $1.score })?.fit {
+                    return rectangle
+                }
+                return ShapeFit(kind: "rectangle", points: rectanglePoints(from: CGPoint(x: bounds.minX, y: bounds.minY), to: CGPoint(x: bounds.maxX, y: bounds.maxY)))
+            case "circle":
+                return ShapeFit(kind: "circle", points: circlePoints(in: bounds, count: 48))
+            case "ellipse":
+                return ShapeFit(kind: "ellipse", points: ellipsePoints(in: bounds, count: 48))
+            default:
+                return nil
+            }
+        }
+
+        private func normalizedGesture(_ points: [CGPoint], count: Int) -> [CGPoint]? {
+            let sampled = resampleToCount(points, count: count)
+            guard sampled.count == count, let bounds = pointBounds(sampled) else { return nil }
+            let center = CGPoint(x: bounds.midX, y: bounds.midY)
+            let firstAngle = atan2(sampled[0].y - center.y, sampled[0].x - center.x)
+            let rotated = sampled.map { rotate($0, around: center, by: -firstAngle) }
+            guard let rotatedBounds = pointBounds(rotated) else { return nil }
+            let scale = max(rotatedBounds.width, rotatedBounds.height, 1)
+            let normalizedCenter = CGPoint(x: rotatedBounds.midX, y: rotatedBounds.midY)
+            return rotated.map {
+                CGPoint(
+                    x: ($0.x - normalizedCenter.x) / scale,
+                    y: ($0.y - normalizedCenter.y) / scale
+                )
+            }
+        }
+
+        private func shapeTemplates(includeClosed: Bool) -> [ShapeTemplate] {
+            var templates: [ShapeTemplate] = [
+                ShapeTemplate(kind: "line", points: templatePolyline([CGPoint(x: -0.5, y: 0), CGPoint(x: 0.5, y: 0)], count: 64), isClosed: false),
+                ShapeTemplate(kind: "polyline", points: templatePolyline([CGPoint(x: -0.5, y: -0.42), CGPoint(x: -0.12, y: 0.35), CGPoint(x: 0.5, y: 0.35)], count: 64), isClosed: false),
+                ShapeTemplate(kind: "polyline", points: templatePolyline([CGPoint(x: -0.5, y: -0.35), CGPoint(x: 0.15, y: -0.35), CGPoint(x: -0.15, y: 0.35), CGPoint(x: 0.5, y: 0.35)], count: 64), isClosed: false)
+            ]
+            if includeClosed {
+                templates.append(contentsOf: [
+                    ShapeTemplate(kind: "triangle", points: templatePolyline([CGPoint(x: 0, y: -0.5), CGPoint(x: 0.48, y: 0.42), CGPoint(x: -0.48, y: 0.42), CGPoint(x: 0, y: -0.5)], count: 64), isClosed: true),
+                    ShapeTemplate(kind: "rectangle", points: templatePolyline([CGPoint(x: -0.5, y: -0.38), CGPoint(x: 0.5, y: -0.38), CGPoint(x: 0.5, y: 0.38), CGPoint(x: -0.5, y: 0.38), CGPoint(x: -0.5, y: -0.38)], count: 64), isClosed: true),
+                    ShapeTemplate(kind: "circle", points: circlePoints(center: .zero, radius: 0.5, count: 63), isClosed: true),
+                    ShapeTemplate(kind: "ellipse", points: ellipsePoints(center: .zero, rx: 0.5, ry: 0.32, angle: 0, count: 63), isClosed: true)
+                ])
+            }
+            return templates
+        }
+
+        private func templateFeaturePenalty(kind: String, points: [CGPoint], bounds: CGRect, diagonal: CGFloat, endpointGap: CGFloat) -> CGFloat {
+            let aspect = max(bounds.width, bounds.height) / max(min(bounds.width, bounds.height), 1)
+            let circularity = closedCircularity(points)
+            let vertices = deduplicatedVertices(simplify(points, epsilon: max(diagonal * 0.045, 4)), diagonal: diagonal)
+            switch kind {
+            case "line":
+                return endpointGap < 0.24 ? 0.18 : min(lineError(points, from: points[0], to: points[points.count - 1]) / diagonal, 0.35)
+            case "polyline":
+                return endpointGap < 0.24 ? 0.16 : (vertices.count < 3 ? 0.14 : 0)
+            case "triangle":
+                return endpointGap > 0.58 ? 0.24 : abs(CGFloat(vertices.count) - 3) * 0.035 + max(0, circularity - 0.58) * 0.1
+            case "rectangle":
+                return endpointGap > 0.48 ? 0.22 : abs(CGFloat(vertices.count) - 4) * 0.035 + max(0, circularity - 0.72) * 0.12
+            case "circle":
+                return endpointGap > 0.52 ? 0.2 : abs(aspect - 1) * 0.05 + max(0, 0.58 - circularity) * 0.18 + (vertices.count <= 5 ? 0.08 : 0)
+            case "ellipse":
+                return endpointGap > 0.52 ? 0.2 : max(0, 0.38 - circularity) * 0.16 + (vertices.count <= 5 ? 0.08 : 0)
+            default:
+                return 0
+            }
+        }
+
+        private func templateDistance(_ lhs: [CGPoint], _ rhs: [CGPoint]) -> CGFloat {
+            guard lhs.count == rhs.count, !lhs.isEmpty else { return .greatestFiniteMagnitude }
+            return zip(lhs, rhs).reduce(CGFloat(0)) { sum, pair in
+                sum + distance(pair.0, pair.1)
+            } / CGFloat(lhs.count)
+        }
+
+        private func templatePolyline(_ points: [CGPoint], count: Int) -> [CGPoint] {
+            resampleToCount(points, count: count)
+        }
+
+        private func resampleToCount(_ points: [CGPoint], count: Int) -> [CGPoint] {
+            guard count > 1, points.count > 1 else { return points }
+            let totalLength = max(polylineLength(points), 1)
+            let interval = totalLength / CGFloat(count - 1)
+            var result = [points[0]]
+            var previous = points[0]
+            var distanceSinceLast: CGFloat = 0
+
+            for current in points.dropFirst() {
+                var segmentStart = previous
+                var segmentLength = distance(segmentStart, current)
+                while distanceSinceLast + segmentLength >= interval, segmentLength > 0.001 {
+                    let remaining = interval - distanceSinceLast
+                    let ratio = remaining / segmentLength
+                    let next = CGPoint(
+                        x: segmentStart.x + (current.x - segmentStart.x) * ratio,
+                        y: segmentStart.y + (current.y - segmentStart.y) * ratio
+                    )
+                    result.append(next)
+                    segmentStart = next
+                    segmentLength = distance(segmentStart, current)
+                    distanceSinceLast = 0
+                }
+                distanceSinceLast += segmentLength
+                previous = current
+            }
+
+            while result.count < count {
+                result.append(points[points.count - 1])
+            }
+            if result.count > count {
+                result = Array(result.prefix(count))
+            }
+            return result
+        }
+
+        private func rotate(_ point: CGPoint, around center: CGPoint, by angle: CGFloat) -> CGPoint {
+            let translated = CGPoint(x: point.x - center.x, y: point.y - center.y)
+            return CGPoint(
+                x: center.x + translated.x * cos(angle) - translated.y * sin(angle),
+                y: center.y + translated.x * sin(angle) + translated.y * cos(angle)
+            )
         }
 
         private func openGapTriangleCandidate(from points: [CGPoint], diagonal: CGFloat) -> ShapeFit? {
