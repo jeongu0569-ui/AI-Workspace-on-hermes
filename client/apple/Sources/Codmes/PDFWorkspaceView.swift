@@ -2563,7 +2563,6 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         @objc func handlePDFTap(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended,
                   isWritingMode,
-                  let selection = lassoSelection,
                   let pdfView else { return }
             let viewPoint = gesture.location(in: pdfView)
             guard let page = pdfView.page(for: viewPoint, nearest: true),
@@ -2572,14 +2571,25 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 return
             }
             let pageIndex = document.index(for: page)
-            guard pageIndex == selection.pageIndex else {
-                clearLassoSelection()
+            if let selection = lassoSelection {
+                guard pageIndex == selection.pageIndex else {
+                    clearLassoSelection()
+                    if tool == .lasso {
+                        selectTappedLassoContent(at: viewPoint, page: page, pageIndex: pageIndex)
+                    }
+                    return
+                }
+                let normalized = normalizedPoint(from: viewPoint, page: page)
+                if !contains(normalized, in: selection.bounds) {
+                    clearLassoSelection()
+                    if tool == .lasso {
+                        selectTappedLassoContent(at: viewPoint, page: page, pageIndex: pageIndex)
+                    }
+                }
                 return
             }
-            let normalized = normalizedPoint(from: viewPoint, page: page)
-            if !contains(normalized, in: selection.bounds) {
-                clearLassoSelection()
-            }
+            guard tool == .lasso else { return }
+            selectTappedLassoContent(at: viewPoint, page: page, pageIndex: pageIndex)
         }
 
         private func lockPDFScrollingForActiveDrawing() {
@@ -2604,8 +2614,11 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             if gestureRecognizer === clearSelectionTapGesture {
                 guard !isShapeHandleTouch,
                       isWritingMode,
-                      lassoSelection != nil,
                       let pdfView else { return false }
+                if tool == .lasso {
+                    return true
+                }
+                guard lassoSelection != nil else { return false }
                 let viewPoint = touch.location(in: pdfView)
                 if !isPointInsideCurrentSelection(viewPoint) {
                     clearLassoSelection()
@@ -3703,6 +3716,67 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             applyAnnotationsToVisibleOverlays()
         }
 
+        private func selectTappedLassoContent(at viewPoint: CGPoint, page: PDFPage, pageIndex: Int) {
+            let point = normalizedPoint(from: viewPoint, page: page)
+            let pageBounds = page.bounds(for: .mediaBox)
+            let hitRadius = max(0.006, 18 / Double(max(min(pageBounds.width, pageBounds.height), 1)))
+            let strokeHit = strokes(for: pageIndex)
+                .compactMap { stroke -> (stroke: CodmesInkStroke, distance: Double)? in
+                    guard let distance = distance(point, to: stroke),
+                          distance <= hitRadius else { return nil }
+                    return (stroke, distance)
+                }
+                .min { $0.distance < $1.distance }
+            let objectHit = objects(for: pageIndex)
+                .compactMap { object -> (object: PDFAnnotationObject, distance: Double)? in
+                    guard let box = object.bbox?.normalizedOrSelf else { return nil }
+                    let distance = distance(point, to: box)
+                    return distance <= hitRadius ? (object, distance) : nil
+                }
+                .min { $0.distance < $1.distance }
+
+            switch (strokeHit, objectHit) {
+            case let (.some(strokeHit), .some(objectHit)) where objectHit.distance < strokeHit.distance:
+                selectTappedObject(objectHit.object, pageIndex: pageIndex)
+            case let (.some(strokeHit), _):
+                selectTappedStroke(strokeHit.stroke, pageIndex: pageIndex)
+            case let (_, .some(objectHit)):
+                selectTappedObject(objectHit.object, pageIndex: pageIndex)
+            default:
+                clearLassoSelection()
+            }
+        }
+
+        private func selectTappedStroke(_ stroke: CodmesInkStroke, pageIndex: Int) {
+            guard let strokeBounds = bounds(for: stroke.points) else { return }
+            lassoSelection = LassoSelection(
+                pageIndex: pageIndex,
+                strokeIds: [stroke.id],
+                objectIds: [],
+                bounds: strokeBounds,
+                outline: []
+            )
+            notifyLassoSelectionChanged()
+            applyCodmesInkAnnotations()
+            applyAnnotationsToVisibleOverlays()
+        }
+
+        private func selectTappedObject(_ object: PDFAnnotationObject, pageIndex: Int) {
+            guard let box = object.bbox?.normalizedOrSelf else { return }
+            lassoSelection = LassoSelection(
+                pageIndex: pageIndex,
+                strokeIds: [],
+                objectIds: [object.id],
+                bounds: AnnotationBoundingBox(x: box.x, y: box.y, width: box.width, height: box.height, normalized: nil),
+                outline: []
+            )
+            selectedObjectId = object.id
+            notifyLassoSelectionChanged()
+            onObjectSelected(object)
+            applyCodmesInkAnnotations()
+            applyAnnotationsToVisibleOverlays()
+        }
+
         private func updateLassoMove(to viewPoint: CGPoint, page: PDFPage, commit: Bool) {
             guard let selection = lassoSelection,
                   selection.pageIndex == activePageIndex,
@@ -4441,6 +4515,25 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             let t = max(0, min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared))
             let projection = CodmesInkPoint(x: start.x + t * dx, y: start.y + t * dy, pressure: nil, timeOffset: nil)
             return hypot(point.x - projection.x, point.y - projection.y)
+        }
+
+        private func distance(_ point: CodmesInkPoint, to stroke: CodmesInkStroke) -> Double? {
+            guard stroke.points.count > 1 else { return nil }
+            return zip(stroke.points, stroke.points.dropFirst())
+                .map { distance(point, toSegmentStart: $0.0, end: $0.1) }
+                .min()
+        }
+
+        private func distance(_ point: CodmesInkPoint, to box: NormalizedBoundingBox) -> Double {
+            if point.x >= box.x,
+               point.x <= box.x + box.width,
+               point.y >= box.y,
+               point.y <= box.y + box.height {
+                return 0
+            }
+            let clampedX = max(box.x, min(box.x + box.width, point.x))
+            let clampedY = max(box.y, min(box.y + box.height, point.y))
+            return hypot(point.x - clampedX, point.y - clampedY)
         }
 
         private func objectIntersectsLasso(box: NormalizedBoundingBox, polygon: [CodmesInkPoint], lassoBounds: AnnotationBoundingBox) -> Bool {
