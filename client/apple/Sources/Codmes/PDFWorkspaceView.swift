@@ -3867,6 +3867,12 @@ fileprivate final class AnnotatedPDFView: PDFView {
 fileprivate final class PDFImmediateDrawingGestureRecognizer: UIGestureRecognizer {
     var maximumNumberOfTouches = 1
     private var activeTouch: UITouch?
+    private var currentSamples: [UITouch] = []
+
+    func locations(in view: UIView) -> [CGPoint] {
+        let samples = currentSamples.isEmpty ? activeTouch.map { [$0] } ?? [] : currentSamples
+        return samples.map { $0.location(in: view) }
+    }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard activeTouch == nil else {
@@ -3879,28 +3885,33 @@ fileprivate final class PDFImmediateDrawingGestureRecognizer: UIGestureRecognize
             return
         }
         activeTouch = touch
+        currentSamples = [touch]
         state = .began
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let activeTouch, touches.contains(activeTouch) else { return }
+        currentSamples = event.coalescedTouches(for: activeTouch) ?? [activeTouch]
         state = .changed
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let activeTouch, touches.contains(activeTouch) else { return }
+        currentSamples = event.coalescedTouches(for: activeTouch) ?? [activeTouch]
         state = .ended
         self.activeTouch = nil
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let activeTouch, touches.contains(activeTouch) else { return }
+        currentSamples = []
         state = .cancelled
         self.activeTouch = nil
     }
 
     override func reset() {
         activeTouch = nil
+        currentSamples = []
     }
 }
 
@@ -4391,6 +4402,9 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         private var activeShapeHandleStartStroke: CodmesInkStroke?
         private var lastPenPointTime: TimeInterval = 0
         private var lastPenOverlayPoint: CGPoint?
+        private var activeEraserPageIndex: Int?
+        private var activeEraserStrokes: [CodmesInkStroke] = []
+        private var lastEraserPoint: CodmesInkPoint?
         private var lassoInteraction: LassoInteraction?
         private var lassoSelection: LassoSelection?
         private var lassoMoveStartSelection: LassoSelection?
@@ -4642,6 +4656,8 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             guard let pdfView else { return }
             let viewPoint = gesture.location(in: pdfView)
             let overlayPoint = gesture.location(in: pdfView.drawingOverlay)
+            let overlaySamples = (gesture as? PDFImmediateDrawingGestureRecognizer)?.locations(in: pdfView.drawingOverlay) ?? [overlayPoint]
+            let viewSamples = (gesture as? PDFImmediateDrawingGestureRecognizer)?.locations(in: pdfView) ?? [viewPoint]
 
             switch gesture.state {
             case .began:
@@ -4674,13 +4690,15 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     activeShapeFit = nil
                     activeShapeDragHandleIndex = nil
                     lastPenPointTime = ProcessInfo.processInfo.systemUptime
-                    lastPenOverlayPoint = overlayPoint
-                    pdfView.drawingOverlay.begin(at: overlayPoint)
+                    let firstOverlayPoint = overlaySamples.first ?? overlayPoint
+                    lastPenOverlayPoint = firstOverlayPoint
+                    pdfView.drawingOverlay.begin(at: firstOverlayPoint)
                     scheduleShapeHoldFit(page: page)
                 } else if tool == .eraser {
                     clearLassoSelectionIfNeeded()
                     pdfView.drawingOverlay.cancel()
-                    eraseStroke(at: viewPoint, page: page)
+                    beginEraserStroke(page: page)
+                    updateEraserStroke(samples: viewSamples, page: page)
                 } else {
                     let normalized = normalizedPoint(from: viewPoint, page: page)
                     if let lassoSelection,
@@ -4720,15 +4738,17 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                         lastPenOverlayPoint = overlayPoint
                         pdfView.drawingOverlay.replace(with: adjusted.points)
                     } else {
-                        let movedDistance = lastPenOverlayPoint.map { distance($0, overlayPoint) } ?? .greatestFiniteMagnitude
-                        if movedDistance >= 0.75 {
-                            pdfView.drawingOverlay.move(to: overlayPoint)
-                            lastPenOverlayPoint = overlayPoint
-                            lastPenPointTime = ProcessInfo.processInfo.systemUptime
+                        for sample in overlaySamples {
+                            let movedDistance = lastPenOverlayPoint.map { distance($0, sample) } ?? .greatestFiniteMagnitude
+                            if movedDistance >= 0.75 {
+                                pdfView.drawingOverlay.move(to: sample)
+                                lastPenOverlayPoint = sample
+                                lastPenPointTime = ProcessInfo.processInfo.systemUptime
+                            }
                         }
                     }
                 } else if tool == .eraser {
-                    eraseStroke(at: viewPoint, page: page)
+                    updateEraserStroke(samples: viewSamples, page: page)
                 } else if tool == .lasso {
                     switch lassoInteraction {
                     case .drawing:
@@ -4779,6 +4799,13 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     }
                     return
                 }
+                if tool == .eraser {
+                    if let page = activePage {
+                        updateEraserStroke(samples: viewSamples, page: page)
+                    }
+                    finishEraserStroke()
+                    return
+                }
                 guard tool == .pen,
                       let page = activePage,
                       let pageIndex = activePageIndex else {
@@ -4786,7 +4813,13 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                     return
                 }
                 if activeShapeFit == nil {
-                    pdfView.drawingOverlay.move(to: overlayPoint)
+                    for sample in overlaySamples {
+                        let movedDistance = lastPenOverlayPoint.map { distance($0, sample) } ?? .greatestFiniteMagnitude
+                        if movedDistance >= 0.75 {
+                            pdfView.drawingOverlay.move(to: sample)
+                            lastPenOverlayPoint = sample
+                        }
+                    }
                 }
                 let overlayPoints = activeShapeFit?.points ?? pdfView.drawingOverlay.finish()
                 if activeShapeFit != nil {
@@ -4813,6 +4846,7 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 activeShapeDragHandleIndex = nil
                 activeShapeHandleDrag = nil
                 activeShapeHandleStartStroke = nil
+                finishEraserStroke()
                 lastPenOverlayPoint = nil
                 lassoInteraction = nil
                 lassoMoveStartSelection = nil
@@ -6111,8 +6145,8 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 let current = points[index]
                 let next = points[index + 1]
                 result[index] = CGPoint(
-                    x: previous.x * 0.22 + current.x * 0.56 + next.x * 0.22,
-                    y: previous.y * 0.22 + current.y * 0.56 + next.y * 0.22
+                    x: previous.x * 0.28 + current.x * 0.44 + next.x * 0.28,
+                    y: previous.y * 0.28 + current.y * 0.44 + next.y * 0.28
                 )
             }
             return result
@@ -6167,6 +6201,53 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             let kept = splitStrokes(strokes, erasingAt: normalized, threshold: threshold)
             guard kept.map(\.id) != strokes.map(\.id) || kept.count != strokes.count else { return }
             onStrokesChanged(pageIndex, kept)
+        }
+
+        private func beginEraserStroke(page: PDFPage) {
+            guard let pdfView, let document = pdfView.document else { return }
+            let pageIndex = document.index(for: page)
+            guard pageIndex >= 0 else { return }
+            activeEraserPageIndex = pageIndex
+            activeEraserStrokes = annotations?.noteStrokes(pageIndex: pageIndex) ?? []
+            lastEraserPoint = nil
+        }
+
+        private func updateEraserStroke(samples: [CGPoint], page: PDFPage) {
+            guard let pdfView,
+                  let document = pdfView.document else { return }
+            let pageIndex = document.index(for: page)
+            guard pageIndex >= 0 else { return }
+            if activeEraserPageIndex != pageIndex {
+                beginEraserStroke(page: page)
+            }
+            guard activeEraserPageIndex == pageIndex,
+                  !activeEraserStrokes.isEmpty else { return }
+            let pageBounds = page.bounds(for: .mediaBox)
+            let threshold = max(0.004, eraserWidth / Double(max(min(pageBounds.width, pageBounds.height), 1)))
+            var nextStrokes = activeEraserStrokes
+            var didChange = false
+            for sample in samples {
+                let normalized = normalizedPoint(from: sample, page: page, pageBounds: pageBounds)
+                if let lastEraserPoint,
+                   inkDistance(lastEraserPoint, normalized) < threshold * 0.35 {
+                    continue
+                }
+                let kept = splitStrokes(nextStrokes, erasingAt: normalized, threshold: threshold)
+                if kept.map(\.id) != nextStrokes.map(\.id) || kept.count != nextStrokes.count {
+                    nextStrokes = kept
+                    didChange = true
+                }
+                lastEraserPoint = normalized
+            }
+            guard didChange else { return }
+            activeEraserStrokes = nextStrokes
+            onStrokesChanged(pageIndex, nextStrokes)
+        }
+
+        private func finishEraserStroke() {
+            activeEraserPageIndex = nil
+            activeEraserStrokes = []
+            lastEraserPoint = nil
         }
 
         private func strokes(for pageIndex: Int) -> [CodmesInkStroke] {
