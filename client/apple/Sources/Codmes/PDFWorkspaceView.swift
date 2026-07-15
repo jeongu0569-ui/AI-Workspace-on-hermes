@@ -2569,15 +2569,15 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             }
 
             let closedDistance = distance(points[0], points[points.count - 1])
-            guard closedDistance / diagonal < 0.42 else { return nil }
+            guard closedDistance / diagonal < 0.65 else { return nil }
 
+            let edgeFit = edgeFitRatio(points, bounds: bounds)
+            let ellipse = ellipsePoints(in: bounds, count: 48)
+            let ellipseScore = ellipseFitError(points, bounds: bounds)
+            let circularityScore = closedCircularity(points)
             var candidates: [(fit: ShapeFit, score: CGFloat)] = []
-            for vertices in polygonVertexOptions(from: points, diagonal: diagonal) where vertices.count == 3 {
-                let triangle = vertices + [vertices[0]]
-                let score = polylineError(points, candidate: triangle) / diagonal
-                if score < 0.28 {
-                    candidates.append((ShapeFit(kind: "triangle", points: triangle), score * 0.92))
-                }
+            if circularityScore < 0.74, let triangleCandidate = bestTriangleCandidate(from: points, diagonal: diagonal) {
+                candidates.append(triangleCandidate)
             }
 
             let rectPoints = [
@@ -2587,17 +2587,19 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 CGPoint(x: bounds.minX, y: bounds.maxY),
                 CGPoint(x: bounds.minX, y: bounds.minY)
             ]
+            if ellipseScore < 0.28, edgeFit < 0.6, circularityScore > 0.62 {
+                return ShapeFit(kind: "ellipse", points: ellipse)
+            }
+
             let rectanglePolylineScore = polylineError(points, candidate: rectPoints) / diagonal
-            let rectangleEdgeMissScore = 1 - edgeFitRatio(points, bounds: bounds)
+            let rectangleEdgeMissScore = 1 - edgeFit
             let rectangleScore = max(rectanglePolylineScore, rectangleEdgeMissScore)
             if rectangleScore < 0.36 {
                 candidates.append((ShapeFit(kind: "rectangle", points: rectPoints), rectangleScore))
             }
 
-            let ellipse = ellipsePoints(in: bounds, count: 48)
-            let ellipseScore = ellipseFitError(points, bounds: bounds)
-            if ellipseScore < 0.42 {
-                candidates.append((ShapeFit(kind: "ellipse", points: ellipse), ellipseScore * 0.78))
+            if ellipseScore < 0.5, circularityScore > 0.52 {
+                candidates.append((ShapeFit(kind: "ellipse", points: ellipse), ellipseScore * 0.7))
             }
 
             return candidates.min { $0.score < $1.score }?.fit
@@ -2643,11 +2645,11 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
         }
 
         private func polygonVertexOptions(from points: [CGPoint], diagonal: CGFloat) -> [[CGPoint]] {
-            let multipliers: [CGFloat] = [0.055, 0.075, 0.095, 0.12, 0.15]
+            let multipliers: [CGFloat] = [0.04, 0.055, 0.075, 0.095, 0.12, 0.15, 0.2]
             var options: [[CGPoint]] = []
             for multiplier in multipliers {
                 let vertices = polygonVertices(from: points, epsilon: diagonal * multiplier)
-                guard vertices.count >= 3, vertices.count <= 5 else { continue }
+                guard vertices.count >= 3, vertices.count <= 6 else { continue }
                 if !options.contains(where: { areSimilarVertices($0, vertices, tolerance: diagonal * 0.035) }) {
                     options.append(vertices)
                 }
@@ -2655,9 +2657,68 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             return options
         }
 
+        private func bestTriangleCandidate(from points: [CGPoint], diagonal: CGFloat) -> (fit: ShapeFit, score: CGFloat)? {
+            var best: (fit: ShapeFit, score: CGFloat)?
+            for vertices in polygonVertexOptions(from: points, diagonal: diagonal) {
+                let triangles = trianglePointOptions(from: vertices)
+                for trianglePoints in triangles {
+                    let triangle = trianglePoints + [trianglePoints[0]]
+                    let score = polylineError(points, candidate: triangle) / diagonal
+                    guard score < 0.34 else { continue }
+                    let weighted = score * 0.72
+                    if best == nil || weighted < best!.score {
+                        best = (ShapeFit(kind: "triangle", points: triangle), weighted)
+                    }
+                }
+            }
+            return best
+        }
+
+        private func trianglePointOptions(from vertices: [CGPoint]) -> [[CGPoint]] {
+            guard vertices.count >= 3 else { return [] }
+            if vertices.count == 3 {
+                return [vertices]
+            }
+            var result: [[CGPoint]] = []
+            for first in 0..<(vertices.count - 2) {
+                for second in (first + 1)..<(vertices.count - 1) {
+                    for third in (second + 1)..<vertices.count {
+                        result.append([vertices[first], vertices[second], vertices[third]])
+                    }
+                }
+            }
+            return result
+        }
+
         private func areSimilarVertices(_ lhs: [CGPoint], _ rhs: [CGPoint], tolerance: CGFloat) -> Bool {
             guard lhs.count == rhs.count else { return false }
             return zip(lhs, rhs).allSatisfy { distance($0, $1) <= tolerance }
+        }
+
+        private func closedCircularity(_ points: [CGPoint]) -> CGFloat {
+            guard points.count > 3 else { return 0 }
+            let area = abs(polygonArea(points))
+            let perimeter = max(polylineLength(points + [points[0]]), 1)
+            return 4 * .pi * area / (perimeter * perimeter)
+        }
+
+        private func polygonArea(_ points: [CGPoint]) -> CGFloat {
+            guard points.count > 2 else { return 0 }
+            var area: CGFloat = 0
+            for index in points.indices {
+                let next = points[(index + 1) % points.count]
+                area += points[index].x * next.y - next.x * points[index].y
+            }
+            return area / 2
+        }
+
+        private func polylineLength(_ points: [CGPoint]) -> CGFloat {
+            guard points.count > 1 else { return 0 }
+            var length: CGFloat = 0
+            for index in 1..<points.count {
+                length += distance(points[index - 1], points[index])
+            }
+            return length
         }
 
         private func ellipseFitError(_ points: [CGPoint], bounds: CGRect) -> CGFloat {
@@ -2665,7 +2726,8 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             let ry = max(bounds.height / 2, 1)
             let center = CGPoint(x: bounds.midX, y: bounds.midY)
             let errors = points.map { point in
-                abs(pow((point.x - center.x) / rx, 2) + pow((point.y - center.y) / ry, 2) - 1)
+                let normalizedRadius = sqrt(pow((point.x - center.x) / rx, 2) + pow((point.y - center.y) / ry, 2))
+                return abs(normalizedRadius - 1)
             }
             return errors.reduce(0, +) / CGFloat(max(errors.count, 1))
         }
