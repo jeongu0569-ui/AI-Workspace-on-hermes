@@ -30,6 +30,7 @@ Recognizer changes must be checked with the replay gate before committing:
 ```bash
 scripts/evaluate_shape_recognition.sh \
   --corpus docs/notes/shape-recognition-quickdraw-samples.jsonl \
+  --strategy geometric \
   --min-accuracy 0.70 \
   --max-wrong 16
 ```
@@ -46,6 +47,20 @@ For local tuning, include mismatch details:
 ```bash
 scripts/evaluate_shape_recognition.sh --show-mismatches
 ```
+
+The evaluator also supports an exemplar strategy:
+
+```bash
+scripts/evaluate_shape_recognition.sh \
+  --corpus /tmp/codmes-shape-quickdraw-400.jsonl \
+  --strategy exemplar \
+  --min-accuracy 0.90 \
+  --max-wrong 40
+```
+
+`exemplar` uses normalized stroke paths and leave-one-out nearest-neighbor
+matching. This is not the current app runtime recognizer yet; it is the
+validation path for moving toward a sample/model-backed recognizer.
 
 For broader manual checks, generate a larger temporary corpus:
 
@@ -67,6 +82,18 @@ QuickDraw corpus still exposes production gaps. The main known confusions are:
 - `triangle -> rectangle`
 - `line -> triangle`
 - `circle -> ellipse`
+
+After adding the exemplar evaluator, the same 400-sample temporary corpus
+reaches:
+
+```text
+strategy=exemplar
+total=400 correct=361 none=0 wrong=39 accuracy=0.9025
+```
+
+This shows that 90% is reachable with sample-backed recognition. The remaining
+work is to export a compact exemplar/model bank and call it from the Notes
+canvas runtime alongside the geometric recognizer.
 
 ## In-App Diagnostics
 
