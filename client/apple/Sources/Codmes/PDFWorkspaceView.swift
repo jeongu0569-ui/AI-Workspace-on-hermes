@@ -2572,10 +2572,12 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             guard closedDistance / diagonal < 0.42 else { return nil }
 
             var candidates: [(fit: ShapeFit, score: CGFloat)] = []
-            let vertices = polygonVertices(from: points, epsilon: diagonal * 0.075)
-            if vertices.count == 3 {
+            for vertices in polygonVertexOptions(from: points, diagonal: diagonal) where vertices.count == 3 {
                 let triangle = vertices + [vertices[0]]
-                candidates.append((ShapeFit(kind: "triangle", points: triangle), polylineError(points, candidate: triangle) / diagonal))
+                let score = polylineError(points, candidate: triangle) / diagonal
+                if score < 0.28 {
+                    candidates.append((ShapeFit(kind: "triangle", points: triangle), score * 0.92))
+                }
             }
 
             let rectPoints = [
@@ -2585,15 +2587,17 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 CGPoint(x: bounds.minX, y: bounds.maxY),
                 CGPoint(x: bounds.minX, y: bounds.minY)
             ]
-            let rectangleScore = min(polylineError(points, candidate: rectPoints) / diagonal, 1 - edgeFitRatio(points, bounds: bounds))
-            if rectangleScore < 0.42 {
+            let rectanglePolylineScore = polylineError(points, candidate: rectPoints) / diagonal
+            let rectangleEdgeMissScore = 1 - edgeFitRatio(points, bounds: bounds)
+            let rectangleScore = max(rectanglePolylineScore, rectangleEdgeMissScore)
+            if rectangleScore < 0.36 {
                 candidates.append((ShapeFit(kind: "rectangle", points: rectPoints), rectangleScore))
             }
 
             let ellipse = ellipsePoints(in: bounds, count: 48)
             let ellipseScore = ellipseFitError(points, bounds: bounds)
-            if ellipseScore < 0.32 {
-                candidates.append((ShapeFit(kind: "ellipse", points: ellipse), ellipseScore))
+            if ellipseScore < 0.42 {
+                candidates.append((ShapeFit(kind: "ellipse", points: ellipse), ellipseScore * 0.78))
             }
 
             return candidates.min { $0.score < $1.score }?.fit
@@ -2636,6 +2640,24 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 ) <= tolerance
             }
             return CGFloat(hits.count) / CGFloat(max(points.count, 1))
+        }
+
+        private func polygonVertexOptions(from points: [CGPoint], diagonal: CGFloat) -> [[CGPoint]] {
+            let multipliers: [CGFloat] = [0.055, 0.075, 0.095, 0.12, 0.15]
+            var options: [[CGPoint]] = []
+            for multiplier in multipliers {
+                let vertices = polygonVertices(from: points, epsilon: diagonal * multiplier)
+                guard vertices.count >= 3, vertices.count <= 5 else { continue }
+                if !options.contains(where: { areSimilarVertices($0, vertices, tolerance: diagonal * 0.035) }) {
+                    options.append(vertices)
+                }
+            }
+            return options
+        }
+
+        private func areSimilarVertices(_ lhs: [CGPoint], _ rhs: [CGPoint], tolerance: CGFloat) -> Bool {
+            guard lhs.count == rhs.count else { return false }
+            return zip(lhs, rhs).allSatisfy { distance($0, $1) <= tolerance }
         }
 
         private func ellipseFitError(_ points: [CGPoint], bounds: CGRect) -> CGFloat {
