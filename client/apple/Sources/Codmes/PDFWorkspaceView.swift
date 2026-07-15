@@ -2592,17 +2592,6 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
                 angularStroke: angularStroke
             )
 
-            if closedDistance / diagonal > 0.62, angularStroke {
-                return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
-            }
-            if let triangle = strokePreservingTriangleCandidate(from: points, diagonal: diagonal) {
-                return triangle
-            }
-            if closedDistance / diagonal >= 0.95 {
-                return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
-            }
-            var candidates: [(fit: ShapeFit, score: CGFloat)] = []
-
             let rectPoints = [
                 CGPoint(x: bounds.minX, y: bounds.minY),
                 CGPoint(x: bounds.maxX, y: bounds.minY),
@@ -2614,20 +2603,23 @@ private struct AnnotatedPDFKitView: UIViewRepresentable {
             let rectanglePolylineScore = polylineError(points, candidate: rectPoints) / diagonal
             let rectangleEdgeMissScore = 1 - edgeFit
             let rectangleScore = max(rectanglePolylineScore, rectangleEdgeMissScore)
-            if rectangleScore < 0.36 {
-                candidates.append((ShapeFit(kind: "rectangle", points: rectPoints), rectangleScore))
-            }
-
             if roundStroke, edgeFit < 0.72, circleScore < 0.28 {
-                candidates.append((ShapeFit(kind: "circle", points: circle), circleScore * 0.55))
+                return ShapeFit(kind: "circle", points: circle)
             }
-
+            if rectangleScore < 0.36 {
+                return ShapeFit(kind: "rectangle", points: rectPoints)
+            }
             if roundStroke, ellipseScore < 0.42 {
-                candidates.append((ShapeFit(kind: "ellipse", points: ellipse), ellipseScore * 0.7))
+                return ShapeFit(kind: "ellipse", points: ellipse)
             }
-
-            if let best = candidates.min(by: { $0.score < $1.score }) {
-                return best.fit
+            if closedDistance / diagonal > 0.62, angularStroke {
+                return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
+            }
+            if let triangle = strokePreservingTriangleCandidate(from: points, diagonal: diagonal) {
+                return triangle
+            }
+            if closedDistance / diagonal >= 0.95 {
+                return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
             }
             return ShapeFit(kind: "polyline", points: fittedPolyline(from: points, diagonal: diagonal))
         }
