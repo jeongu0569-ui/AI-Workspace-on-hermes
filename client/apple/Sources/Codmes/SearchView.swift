@@ -21,14 +21,21 @@ struct SearchView: View {
         }
     }
 
-    private var noteFileGroups: [NoteSearchFileGroup] {
-        let notes = visibleResults.filter { $0.surface == "notes" }
-        let grouped = Dictionary(grouping: notes) { $0.target.path ?? $0.title }
+    private func fileGroups(surface: GlobalSearchSurface) -> [NoteSearchFileGroup] {
+        let fileResults = visibleResults.filter { $0.surface == surface.rawValue && $0.target.path != nil }
+        let grouped = Dictionary(grouping: fileResults) { $0.target.path ?? $0.title }
+        let summaries = store.globalSearchResponse?.documents ?? []
+        let summaryByPath = Dictionary(uniqueKeysWithValues: summaries.map { ($0.path, $0) })
+        let documentOrder = Dictionary(uniqueKeysWithValues: summaries.enumerated().map { ($0.element.path, $0.offset) })
         return grouped.map { path, results in
-            NoteSearchFileGroup(path: path, results: results.sorted(by: sortSearchResults))
+            NoteSearchFileGroup(
+                path: path,
+                results: results.sorted(by: sortSearchResults),
+                summary: summaryByPath[path]
+            )
         }
         .sorted { lhs, rhs in
-            (lhs.results.first?.score ?? 0) > (rhs.results.first?.score ?? 0)
+            (documentOrder[lhs.path] ?? .max) < (documentOrder[rhs.path] ?? .max)
         }
     }
 
@@ -109,8 +116,8 @@ struct SearchView: View {
                                     .padding(.horizontal, 16)
 
                                 VStack(alignment: .leading, spacing: 0) {
-                                    if group == .notes {
-                                        ForEach(noteFileGroups) { fileGroup in
+                                    if group == .notes || group == .codes {
+                                        ForEach(fileGroups(surface: group)) { fileGroup in
                                             NoteSearchFileGroupView(
                                                 fileGroup: fileGroup,
                                                 query: submittedQuery,
@@ -122,8 +129,9 @@ struct SearchView: View {
                                             .padding(.horizontal, 16)
                                             .background(Color.secondary.opacity(0.07))
                                         }
-                                    } else {
-                                        ForEach(results) { result in
+                                    }
+
+                                    ForEach(results.filter { group == .chat || $0.target.path == nil }) { result in
                                             Button {
                                                 openResult(result)
                                             } label: {
@@ -135,7 +143,6 @@ struct SearchView: View {
                                             .onAppear {
                                                 loadMoreIfNeeded(resultIDs: [result.id])
                                             }
-                                        }
                                     }
                                 }
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -332,6 +339,7 @@ struct SearchView: View {
                         returnedCount: mergedResults.count,
                         nextCursor: nextPage.nextCursor,
                         hasMore: nextPage.hasMore,
+                        documents: nextPage.documents,
                         results: mergedResults
                     )
                     store.statusMessage = "\(mergedResults.count) of \(nextPage.resultCount) global results"
@@ -387,6 +395,7 @@ struct SearchView: View {
 private struct NoteSearchFileGroup: Identifiable {
     let path: String
     let results: [GlobalSearchResult]
+    let summary: GlobalSearchDocumentSummary?
 
     var id: String { path }
     var title: String { URL(fileURLWithPath: path).lastPathComponent }
@@ -400,26 +409,30 @@ private struct NoteSearchFileGroupView: View {
     let onOpen: (GlobalSearchResult) -> Void
 
     private var previewResults: [NoteSearchPreview] {
-        let pageMatches = fileGroup.results
-            .filter { $0.target.page != nil }
+        let contentMatches = fileGroup.results.filter { !isFileTitleResult($0) }
+        let pageMatches = contentMatches.filter { $0.target.page != nil }
         let groupedByPage = Dictionary(grouping: pageMatches) { $0.target.page ?? 0 }
         let pagePreviews = groupedByPage.keys.sorted().flatMap { page in
             makePagePreviews(groupedByPage[page] ?? [])
         }
-        return [NoteSearchPreview(result: coverResult, crop: nil, matchCount: 0, resultIDs: [coverResult.id])] + pagePreviews
+        let nonPagePreviews = contentMatches
+            .filter { $0.target.page == nil }
+            .map { NoteSearchPreview(result: $0, crop: nil, matchCount: 1, resultIDs: [$0.id]) }
+        return [NoteSearchPreview(result: coverResult, crop: nil, matchCount: 0, resultIDs: [coverResult.id])]
+            + pagePreviews
+            + nonPagePreviews
     }
 
     private var coverResult: GlobalSearchResult {
         if let fileMatch = fileGroup.results
-            .filter({ $0.target.page == nil })
-            .max(by: { $0.score < $1.score }) {
+            .first(where: isFileTitleResult) {
             return fileMatch
         }
         let source = fileGroup.results[0]
         return GlobalSearchResult(
             id: "cover:\(fileGroup.path)",
             surface: source.surface,
-            kind: "note_file",
+            kind: source.surface == "codes" ? "code_file" : "note_file",
             title: fileGroup.title,
             subtitle: fileGroup.path,
             snippet: fileGroup.path,
@@ -448,7 +461,7 @@ private struct NoteSearchFileGroupView: View {
                         .font(.headline)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text("\(fileGroup.results.count) results")
+                    Text(resultSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -477,6 +490,14 @@ private struct NoteSearchFileGroupView: View {
             }
         }
         .padding(.vertical, 8)
+    }
+
+    private var resultSummary: String {
+        let occurrences = fileGroup.summary?.occurrenceCount ?? fileGroup.results.filter { !isFileTitleResult($0) }.count
+        let pages = fileGroup.summary?.matchedPageCount ?? Set(fileGroup.results.compactMap(\.target.page)).count
+        if occurrences == 0 { return "Filename match" }
+        if pages > 0 { return "\(pages) pages · \(occurrences) matches" }
+        return "\(occurrences) matches"
     }
 }
 
@@ -543,10 +564,10 @@ private struct NoteSearchPreviewCard: View {
         if let page = result.target.page {
             return preview.matchCount > 1 ? "p.\(page) · \(preview.matchCount) matches" : "p.\(page)"
         }
-        return result.title
+        return isFileMatch ? result.title : "Match"
     }
 
-    private var isFileMatch: Bool { result.target.page == nil }
+    private var isFileMatch: Bool { isFileTitleResult(result) || result.id.hasPrefix("cover:") }
 }
 
 private struct NoteSearchPreview: Identifiable {
@@ -556,9 +577,13 @@ private struct NoteSearchPreview: Identifiable {
     let resultIDs: [String]
 
     var id: String {
-        guard let crop else { return "cover:\(result.target.path ?? result.id)" }
+        guard let crop else { return result.id }
         return "\(result.target.path ?? ""):\(result.target.page ?? 0):\(crop.x):\(crop.y)"
     }
+}
+
+private func isFileTitleResult(_ result: GlobalSearchResult) -> Bool {
+    result.kind == "note_file" || result.kind == "code_file"
 }
 
 private func makePagePreviews(_ results: [GlobalSearchResult]) -> [NoteSearchPreview] {

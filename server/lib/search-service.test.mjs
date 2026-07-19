@@ -193,6 +193,43 @@ test("global search keeps PDF filename matches and separate content occurrences"
   assert.equal(filenameResult.results[0].target.page, null);
 });
 
+test("global search ranks documents by filename match and document match counts", async () => {
+  const root = await fixtureWorkspace();
+  const indexPath = path.join(root, ".codmes", "index", "search.json");
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await fs.writeFile(indexPath, JSON.stringify({
+    builtAt: new Date(0).toISOString(),
+    items: [
+      { path: "Notes/oracle.pdf", kind: "pdf", modifiedAt: new Date(0).toISOString() },
+      { path: "Notes/database-a.pdf", kind: "pdf", modifiedAt: new Date(0).toISOString() },
+      { path: "Notes/database-b.pdf", kind: "pdf", modifiedAt: new Date(0).toISOString() }
+    ],
+    chunks: [
+      { id: "title-doc", path: "Notes/oracle.pdf", kind: "pdf", page: 9, chunkIndex: 0, text: "Oracle once" },
+      { id: "a-page-3", path: "Notes/database-a.pdf", kind: "pdf", page: 3, chunkIndex: 0, text: "Oracle A3" },
+      { id: "a-page-1", path: "Notes/database-a.pdf", kind: "pdf", page: 1, chunkIndex: 1, text: "Oracle A1" },
+      { id: "a-page-2", path: "Notes/database-a.pdf", kind: "pdf", page: 2, chunkIndex: 2, text: "Oracle A2" },
+      { id: "b-page-2-a", path: "Notes/database-b.pdf", kind: "pdf", page: 2, chunkIndex: 0, text: "Oracle B2 first" },
+      { id: "b-page-2-b", path: "Notes/database-b.pdf", kind: "pdf", page: 2, chunkIndex: 1, text: "Oracle B2 second" }
+    ]
+  }), "utf8");
+
+  const result = await globalSearch(root, { query: "oracle", surface: "notes" });
+  assert.deepEqual(result.documents.map((document) => document.path), [
+    "Notes/oracle.pdf",
+    "Notes/database-a.pdf",
+    "Notes/database-b.pdf"
+  ]);
+  assert.deepEqual(result.documents.map((document) => document.titleMatch), ["exact", "none", "none"]);
+  assert.deepEqual(result.documents.map((document) => document.matchedPageCount), [1, 3, 1]);
+  assert.deepEqual(result.documents.map((document) => document.occurrenceCount), [1, 3, 2]);
+  assert.deepEqual(
+    result.results.filter((hit) => hit.target.path === "Notes/database-a.pdf").map((hit) => hit.target.page),
+    [1, 2, 3]
+  );
+  assert.equal(result.results.filter((hit) => hit.target.path).every((hit) => hit.score === 0), true);
+});
+
 test("global search returns PDF occurrences beyond the former 40-result limit", async () => {
   const root = await fixtureWorkspace();
   const indexPath = path.join(root, ".codmes", "index", "search.json");

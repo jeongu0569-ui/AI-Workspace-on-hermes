@@ -755,7 +755,18 @@ struct GlobalSearchResponse: Codable {
     let returnedCount: Int?
     let nextCursor: String?
     let hasMore: Bool?
+    let documents: [GlobalSearchDocumentSummary]?
     let results: [GlobalSearchResult]
+}
+
+struct GlobalSearchDocumentSummary: Codable, Identifiable {
+    var id: String { path }
+    let path: String
+    let title: String
+    let surface: String
+    let titleMatch: String
+    let matchedPageCount: Int
+    let occurrenceCount: Int
 }
 
 struct GlobalSearchResult: Codable, Identifiable {

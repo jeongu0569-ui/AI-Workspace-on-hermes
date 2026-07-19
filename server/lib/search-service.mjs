@@ -144,21 +144,21 @@ export async function globalSearch(workspaceRoot, request = {}) {
   const pageSize = clampNumber(request.limit || request.maxResults, 1, 100, 100);
   const afterResultId = decodeGlobalSearchCursor(request.cursor, query, surface);
   const fileResults = await searchGlobalFileIndex(workspaceRoot, { query, surface });
+  const organizedFiles = organizeGlobalFileResults(fileResults, query);
   const conversationResults = await searchGlobalConversations(workspaceRoot, {
     query,
     surface,
     unbounded: true
   });
-  const allResults = [...fileResults, ...conversationResults]
+  const orderedConversations = conversationResults
     .filter((result) => result.surface && surfaceMatches(result.surface, surface))
     .filter((result) => !isInternalSearchPath(result.target?.path || ""))
     .sort((a, b) => (
       b.score - a.score
       || String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))
-      || String(a.target?.path || "").localeCompare(String(b.target?.path || ""))
-      || Number(a.target?.page || 0) - Number(b.target?.page || 0)
       || a.id.localeCompare(b.id)
     ));
+  const allResults = [...organizedFiles.results, ...orderedConversations];
   const cursorIndex = afterResultId
     ? allResults.findIndex((result) => result.id === afterResultId)
     : -1;
@@ -173,6 +173,7 @@ export async function globalSearch(workspaceRoot, request = {}) {
     query,
     surface,
     scope: { type: "global" },
+    documents: organizedFiles.documents,
     resultCount: allResults.length,
     returnedCount: results.length,
     nextCursor: nextOffset < allResults.length
@@ -373,25 +374,25 @@ async function searchGlobalFileIndex(workspaceRoot, request) {
   }
   const query = String(request.query || "").trim();
   const itemByPath = new Map((index.items || []).map((item) => [item.path, item]));
-  const scored = [];
+  const matches = [];
   for (const item of itemByPath.values()) {
     if (isInternalSearchPath(item.path)) continue;
     const resultSurface = surfaceForPath(item.path);
     if (!surfaceMatches(resultSurface, request.surface)) continue;
-    const itemMatch = scoreGlobalItem(item, query);
-    if (itemMatch.score <= 0) continue;
-    scored.push(toGlobalItemResult(item, resultSurface, itemMatch));
+    const titleMatch = classifyFileNameMatch(item.path, query);
+    if (titleMatch === "none") continue;
+    matches.push(toGlobalItemResult(item, resultSurface));
   }
   for (const chunk of index.chunks) {
     if (isInternalSearchPath(chunk.path)) continue;
     const resultSurface = surfaceForPath(chunk.path);
     if (!surfaceMatches(resultSurface, request.surface)) continue;
     const item = itemByPath.get(chunk.path) || {};
-    const match = scoreGlobalChunk(chunk, item, query);
-    if (match.score <= 0) continue;
-    scored.push(toGlobalFileResult(chunk, item, resultSurface, match, query));
+    const match = matchGlobalChunk(chunk, query);
+    if (!match.matched) continue;
+    matches.push(toGlobalFileResult(chunk, item, resultSurface, match));
   }
-  return dedupeGlobalResults(scored);
+  return dedupeGlobalResults(matches);
 }
 
 async function searchGlobalFileScan(workspaceRoot, request) {
@@ -414,7 +415,7 @@ async function searchGlobalFileScan(workspaceRoot, request) {
         title: path.basename(result.path),
         subtitle: subtitleForPath(result.path, result.page),
         snippet: result.snippet || result.path,
-        score: normalizeLegacyScore(result.score),
+        score: 0,
         updatedAt: result.modifiedAt || null,
         target: {
           path: result.path,
@@ -491,7 +492,7 @@ function toGlobalFileResult(chunk, item, surface, match) {
     title: path.basename(chunk.path),
     subtitle: subtitleForPath(chunk.path, page),
     snippet: match.snippet,
-    score: match.score,
+    score: 0,
     updatedAt: item.modifiedAt || null,
     target: {
       path: chunk.path,
@@ -505,7 +506,7 @@ function toGlobalFileResult(chunk, item, surface, match) {
   };
 }
 
-function toGlobalItemResult(item, surface, match) {
+function toGlobalItemResult(item, surface) {
   return {
     id: stableResultId("item", item.path),
     surface,
@@ -513,7 +514,7 @@ function toGlobalItemResult(item, surface, match) {
     title: path.basename(item.path),
     subtitle: item.path,
     snippet: item.path,
-    score: match.score,
+    score: 0,
     updatedAt: item.modifiedAt || null,
     target: {
       path: item.path,
@@ -527,46 +528,100 @@ function toGlobalItemResult(item, surface, match) {
   };
 }
 
-function scoreGlobalItem(item, query) {
-  const fileName = path.basename(item.path || "");
+function classifyFileNameMatch(filePath, query) {
+  const fileName = path.basename(filePath || "");
   const lowerFileName = fileName.toLocaleLowerCase();
   const lowerTitle = lowerFileName.replace(path.extname(lowerFileName), "");
   const phrase = query.toLocaleLowerCase();
-  let score = 0;
-  if (lowerTitle === phrase || lowerFileName === phrase) score += 100;
-  if (lowerTitle.startsWith(phrase) || lowerFileName.startsWith(phrase)) score += 70;
-  if (lowerFileName.includes(phrase)) score += 60;
-  if (score <= 0) return { score: 0 };
-  if (isRecent(item.modifiedAt)) score += 10;
-  return { score };
+  if (lowerTitle === phrase || lowerFileName === phrase) return "exact";
+  if (lowerTitle.startsWith(phrase) || lowerFileName.startsWith(phrase)) return "prefix";
+  if (lowerFileName.includes(phrase)) return "contains";
+  return "none";
 }
 
-function scoreGlobalChunk(chunk, item, query) {
+function matchGlobalChunk(chunk, query) {
   const text = String(chunk.text || "");
   const lowerText = text.toLocaleLowerCase();
   const phrase = query.toLocaleLowerCase();
-  let score = 0;
   const exactIndex = lowerText.indexOf(phrase);
-  if (exactIndex >= 0) score += 30;
-  const tokens = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  let tokenHits = 0;
-  for (const token of tokens) {
-    if (lowerText.includes(token)) tokenHits += 1;
-  }
-  if (tokens.length) score += Math.round((tokenHits / tokens.length) * 25);
-  if (score <= 0) return { score: 0, snippet: "" };
-  if (isRecent(item.modifiedAt)) score += 10;
+  const tokens = phrase.split(/\s+/).filter(Boolean);
+  const matched = exactIndex >= 0 || (tokens.length > 1 && tokens.every((token) => lowerText.includes(token)));
+  if (!matched) return { matched: false, snippet: "" };
   const index = exactIndex >= 0 ? exactIndex : firstTokenIndex(lowerText, tokens);
   return {
-    score,
+    matched: true,
     snippet: index >= 0 ? snippet(text, index, query.length) : chunk.path
   };
+}
+
+function organizeGlobalFileResults(results, query) {
+  const groups = new Map();
+  results.forEach((result, sourceIndex) => {
+    const filePath = result.target?.path;
+    if (!filePath) return;
+    if (!groups.has(filePath)) groups.set(filePath, []);
+    groups.get(filePath).push({ result, sourceIndex });
+  });
+  const titleMatchRank = { exact: 3, prefix: 2, contains: 1, none: 0 };
+  const documents = Array.from(groups, ([filePath, entries]) => {
+    const contentEntries = entries.filter(({ result }) => !isGlobalFileTitleResult(result));
+    const pages = new Set(contentEntries.map(({ result }) => result.target?.page).filter(Number.isFinite));
+    const titleMatch = classifyFileNameMatch(filePath, query);
+    return {
+      path: filePath,
+      title: path.basename(filePath),
+      surface: entries[0]?.result.surface || surfaceForPath(filePath),
+      titleMatch,
+      matchedPageCount: pages.size,
+      occurrenceCount: contentEntries.length,
+      entries
+    };
+  }).sort((a, b) => (
+    titleMatchRank[b.titleMatch] - titleMatchRank[a.titleMatch]
+    || b.matchedPageCount - a.matchedPageCount
+    || b.occurrenceCount - a.occurrenceCount
+    || a.path.localeCompare(b.path)
+  ));
+  const orderedResults = documents.flatMap((document) => document.entries
+    .sort(compareGlobalFileEntries)
+    .map(({ result }) => result));
+  return {
+    documents: documents.map(({ entries, ...summary }) => summary),
+    results: orderedResults
+  };
+}
+
+function compareGlobalFileEntries(lhs, rhs) {
+  const lhsTitle = isGlobalFileTitleResult(lhs.result);
+  const rhsTitle = isGlobalFileTitleResult(rhs.result);
+  if (lhsTitle !== rhsTitle) return lhsTitle ? -1 : 1;
+  const lhsPage = Number(lhs.result.target?.page);
+  const rhsPage = Number(rhs.result.target?.page);
+  if (Number.isFinite(lhsPage) && Number.isFinite(rhsPage) && lhsPage !== rhsPage) return lhsPage - rhsPage;
+  if (Number.isFinite(lhsPage) !== Number.isFinite(rhsPage)) return Number.isFinite(lhsPage) ? -1 : 1;
+  const lhsBox = normalizedSearchBox(lhs.result.target?.bbox);
+  const rhsBox = normalizedSearchBox(rhs.result.target?.bbox);
+  if (lhsBox.y !== rhsBox.y) return lhsBox.y - rhsBox.y;
+  if (lhsBox.x !== rhsBox.x) return lhsBox.x - rhsBox.x;
+  return lhs.sourceIndex - rhs.sourceIndex || lhs.result.id.localeCompare(rhs.result.id);
+}
+
+function normalizedSearchBox(bbox) {
+  const box = bbox?.normalized || bbox || {};
+  return {
+    x: Number.isFinite(Number(box.x)) ? Number(box.x) : Number.POSITIVE_INFINITY,
+    y: Number.isFinite(Number(box.y)) ? Number(box.y) : Number.POSITIVE_INFINITY
+  };
+}
+
+function isGlobalFileTitleResult(result) {
+  return result.kind === "note_file" || result.kind === "code_file";
 }
 
 function dedupeGlobalResults(results, maxResults = Number.POSITIVE_INFINITY) {
   const seen = new Set();
   const deduped = [];
-  for (const result of results.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))) {
+  for (const result of results) {
     const key = `${result.kind}:${result.target.path || ""}:${result.target.page ?? ""}:${result.snippet}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -598,7 +653,7 @@ function globalFileKind(relativePath, kind, source) {
   if (normalizedSource.includes("annotation")) return "pdf_annotation";
   if (ext === ".pdf" || kind === "pdf") return "pdf_chunk";
   if (ext === ".md" || ext === ".markdown" || kind === "markdown") return "markdown_chunk";
-  if (surfaceForPath(relativePath) === "notes") return "note_file";
+  if (surfaceForPath(relativePath) === "notes") return "note_chunk";
   return "code_chunk";
 }
 
@@ -632,12 +687,6 @@ function normalizeLegacyScore(score) {
   const value = Number(score || 0);
   if (!Number.isFinite(value)) return 0;
   return value <= 1 ? Math.round(value * 100) : value;
-}
-
-function isRecent(value) {
-  const time = Date.parse(value || "");
-  if (!Number.isFinite(time)) return false;
-  return Date.now() - time <= 7 * 24 * 60 * 60 * 1000;
 }
 
 function firstTokenIndex(text, tokens) {
