@@ -110,7 +110,11 @@ struct SearchView: View {
                                 VStack(alignment: .leading, spacing: 0) {
                                     if group == .notes {
                                         ForEach(noteFileGroups) { fileGroup in
-                                            NoteSearchFileGroupView(fileGroup: fileGroup, query: submittedQuery, thumbnailURL: thumbnailURL(for:)) { result in
+                                            NoteSearchFileGroupView(
+                                                fileGroup: fileGroup,
+                                                query: submittedQuery,
+                                                thumbnailURL: { result, crop in thumbnailURL(for: result, crop: crop) }
+                                            ) { result in
                                                 openResult(result)
                                             }
                                             .padding(.horizontal, 16)
@@ -294,7 +298,7 @@ struct SearchView: View {
         isSearchFieldFocused = false
     }
 
-    private func thumbnailURL(for result: GlobalSearchResult) -> URL? {
+    private func thumbnailURL(for result: GlobalSearchResult, crop: NormalizedBoundingBox? = nil) -> URL? {
         guard let path = result.target.path,
               path.lowercased().hasSuffix(".pdf"),
               let api = store.api else { return nil }
@@ -302,7 +306,7 @@ struct SearchView: View {
         return try? api.pdfThumbnailURL(
             path: path,
             page: page,
-            crop: result.target.page == nil ? nil : result.target.bbox?.normalizedOrSelf,
+            crop: result.target.page == nil ? nil : crop ?? result.target.bbox?.normalizedOrSelf,
             highlightQuery: result.target.page == nil ? nil : submittedQuery
         )
     }
@@ -327,14 +331,17 @@ private struct NoteSearchFileGroup: Identifiable {
 private struct NoteSearchFileGroupView: View {
     let fileGroup: NoteSearchFileGroup
     let query: String
-    let thumbnailURL: (GlobalSearchResult) -> URL?
+    let thumbnailURL: (GlobalSearchResult, NormalizedBoundingBox?) -> URL?
     let onOpen: (GlobalSearchResult) -> Void
 
-    private var previewResults: [GlobalSearchResult] {
+    private var previewResults: [NoteSearchPreview] {
         let pageMatches = fileGroup.results
             .filter { $0.target.page != nil }
-            .sorted(by: sortSearchResults)
-        return [coverResult] + pageMatches
+        let groupedByPage = Dictionary(grouping: pageMatches) { $0.target.page ?? 0 }
+        let pagePreviews = groupedByPage.keys.sorted().flatMap { page in
+            makePagePreviews(groupedByPage[page] ?? [])
+        }
+        return [NoteSearchPreview(result: coverResult, crop: nil, matchCount: 0)] + pagePreviews
     }
 
     private var coverResult: GlobalSearchResult {
@@ -384,12 +391,16 @@ private struct NoteSearchFileGroupView: View {
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 10) {
-                    ForEach(previewResults) { result in
+                LazyHStack(alignment: .top, spacing: 12) {
+                    ForEach(previewResults) { preview in
                         Button {
-                            onOpen(result)
+                            onOpen(preview.result)
                         } label: {
-                            NoteSearchPreviewCard(result: result, query: query, thumbnailURL: thumbnailURL(result))
+                            NoteSearchPreviewCard(
+                                preview: preview,
+                                query: query,
+                                thumbnailURL: thumbnailURL(preview.result, preview.crop)
+                            )
                         }
                         .buttonStyle(.plain)
                     }
@@ -402,9 +413,13 @@ private struct NoteSearchFileGroupView: View {
 }
 
 private struct NoteSearchPreviewCard: View {
-    let result: GlobalSearchResult
+    let preview: NoteSearchPreview
     let query: String
     let thumbnailURL: URL?
+
+    private var result: GlobalSearchResult { preview.result }
+    private var cardWidth: CGFloat { isFileMatch ? 112 : 210 }
+    private let imageHeight: CGFloat = 148
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -420,13 +435,13 @@ private struct NoteSearchPreviewCard: View {
                             image
                                 .resizable()
                                 .aspectRatio(contentMode: isFileMatch ? .fit : .fill)
-                                .frame(width: 146, height: 120)
+                                .frame(width: cardWidth, height: imageHeight)
                                 .clipped()
                         case .failure:
                             snippetPreview
                         case .empty:
                             ProgressView()
-                                .frame(width: 146, height: 120)
+                                .frame(width: cardWidth, height: imageHeight)
                         @unknown default:
                             snippetPreview
                         }
@@ -436,14 +451,14 @@ private struct NoteSearchPreviewCard: View {
                     snippetPreview
                 }
             }
-            .frame(width: 146, height: 120)
+            .frame(width: cardWidth, height: imageHeight)
 
             Text(pageLabel)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
         }
-        .frame(width: 146, alignment: .leading)
+        .frame(width: cardWidth, alignment: .leading)
         .contentShape(Rectangle())
     }
 
@@ -453,17 +468,72 @@ private struct NoteSearchPreviewCard: View {
             .lineLimit(6)
             .foregroundStyle(.secondary)
             .padding(10)
-            .frame(width: 146, height: 120, alignment: .topLeading)
+            .frame(width: cardWidth, height: imageHeight, alignment: .topLeading)
     }
 
     private var pageLabel: String {
         if let page = result.target.page {
-            return "p.\(page)"
+            return preview.matchCount > 1 ? "p.\(page) · \(preview.matchCount) matches" : "p.\(page)"
         }
         return result.title
     }
 
     private var isFileMatch: Bool { result.target.page == nil }
+}
+
+private struct NoteSearchPreview: Identifiable {
+    let result: GlobalSearchResult
+    let crop: NormalizedBoundingBox?
+    let matchCount: Int
+
+    var id: String {
+        guard let crop else { return "cover:\(result.target.path ?? result.id)" }
+        return "\(result.target.path ?? ""):\(result.target.page ?? 0):\(crop.x):\(crop.y)"
+    }
+}
+
+private func makePagePreviews(_ results: [GlobalSearchResult]) -> [NoteSearchPreview] {
+    let sorted = results.sorted { lhs, rhs in
+        let lhsBox = lhs.target.bbox?.normalizedOrSelf
+        let rhsBox = rhs.target.bbox?.normalizedOrSelf
+        if lhsBox?.y != rhsBox?.y { return (lhsBox?.y ?? 1) < (rhsBox?.y ?? 1) }
+        return (lhsBox?.x ?? 1) < (rhsBox?.x ?? 1)
+    }
+    var clusters: [[GlobalSearchResult]] = []
+    for result in sorted {
+        guard let resultBox = result.target.bbox?.normalizedOrSelf,
+              let lastCluster = clusters.last,
+              let clusterBox = boundingBox(for: lastCluster),
+              previewCanContain(union(clusterBox, resultBox)) else {
+            clusters.append([result])
+            continue
+        }
+        clusters[clusters.count - 1].append(result)
+    }
+    return clusters.map { cluster in
+        NoteSearchPreview(result: cluster[0], crop: boundingBox(for: cluster), matchCount: cluster.count)
+    }
+}
+
+private func boundingBox(for results: [GlobalSearchResult]) -> NormalizedBoundingBox? {
+    let boxes = results.compactMap { $0.target.bbox?.normalizedOrSelf }
+    guard var result = boxes.first else { return nil }
+    for box in boxes.dropFirst() {
+        result = union(result, box)
+    }
+    return result
+}
+
+private func union(_ lhs: NormalizedBoundingBox, _ rhs: NormalizedBoundingBox) -> NormalizedBoundingBox {
+    let x = min(lhs.x, rhs.x)
+    let y = min(lhs.y, rhs.y)
+    let maxX = max(lhs.x + lhs.width, rhs.x + rhs.width)
+    let maxY = max(lhs.y + lhs.height, rhs.y + rhs.height)
+    return NormalizedBoundingBox(x: x, y: y, width: maxX - x, height: maxY - y)
+}
+
+private func previewCanContain(_ box: NormalizedBoundingBox) -> Bool {
+    box.width <= 0.36 && box.height <= 0.16
 }
 
 private struct GlobalSearchResultRow: View {

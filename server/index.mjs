@@ -903,7 +903,7 @@ async function streamPdfThumbnail(res, url) {
 
 async function renderPdfThumbnail(absolutePath, relativePath, stat, page, crop, highlightQuery) {
   const cropKey = crop ? `${crop.x}:${crop.y}:${crop.width}:${crop.height}` : "cover";
-  const key = Buffer.from(`pdf-preview-v3\n${relativePath}\n${stat.size}:${stat.mtimeMs}\n${page}\n${cropKey}\n${highlightQuery.toLocaleLowerCase()}`, "utf8").toString("base64url");
+  const key = Buffer.from(`pdf-preview-v4\n${relativePath}\n${stat.size}:${stat.mtimeMs}\n${page}\n${cropKey}\n${highlightQuery.toLocaleLowerCase()}`, "utf8").toString("base64url");
   const outputPath = path.join(WORKSPACE_ROOT, ".codmes", "index", "thumbnails", `${key}.png`);
   try {
     await fs.access(outputPath);
@@ -928,20 +928,26 @@ if highlight_query:
             x, y, width, height = crop_values
             target_x = page_rect.x0 + (x + width / 2) * page_rect.width
             target_y = page_rect.y0 + (y + height / 2) * page_rect.height
-            match = min(matches, key=lambda rect: (rect.x0 + rect.x1 - 2 * target_x) ** 2 + (rect.y0 + rect.y1 - 2 * target_y) ** 2)
+            selected_matches = [match for match in matches if (
+                x - 0.01 <= ((match.x0 + match.x1) / 2 - page_rect.x0) / page_rect.width <= x + width + 0.01
+                and y - 0.01 <= ((match.y0 + match.y1) / 2 - page_rect.y0) / page_rect.height <= y + height + 0.01
+            )]
+            if not selected_matches:
+                selected_matches = [min(matches, key=lambda rect: (rect.x0 + rect.x1 - 2 * target_x) ** 2 + (rect.y0 + rect.y1 - 2 * target_y) ** 2)]
         else:
-            match = matches[0]
-        annotation = page.add_highlight_annot(match)
-        annotation.set_colors(stroke=(1.0, 0.55, 0.16))
-        annotation.set_opacity(0.45)
-        annotation.update()
+            selected_matches = [matches[0]]
+        for match in selected_matches:
+            annotation = page.add_highlight_annot(match)
+            annotation.set_colors(stroke=(1.0, 0.55, 0.16))
+            annotation.set_opacity(0.45)
+            annotation.update()
 if crop_values:
     x, y, width, height = crop_values
     center_x = x + width / 2
     center_y = y + height / 2
-    crop_width = min(1.0, max(0.55, width + 0.16))
-    landscape_height = crop_width * page_rect.width / (1.8 * page_rect.height)
-    crop_height = min(1.0, max(height + 0.08, landscape_height))
+    crop_width = min(1.0, max(0.38, width + 0.10))
+    landscape_height = crop_width * page_rect.width / (1.48 * page_rect.height)
+    crop_height = min(1.0, max(height + 0.06, landscape_height))
     left = min(max(0.0, center_x - crop_width / 2), 1.0 - crop_width)
     top = min(max(0.0, center_y - crop_height / 2), 1.0 - crop_height)
     clip = fitz.Rect(
@@ -950,7 +956,7 @@ if crop_values:
         page_rect.x0 + (left + crop_width) * page_rect.width,
         page_rect.y0 + (top + crop_height) * page_rect.height
     )
-    pix = page.get_pixmap(matrix=fitz.Matrix(0.9, 0.9), clip=clip, alpha=False)
+    pix = page.get_pixmap(matrix=fitz.Matrix(1.15, 1.15), clip=clip, alpha=False)
 else:
     pix = page.get_pixmap(matrix=fitz.Matrix(0.45, 0.45), alpha=False)
 pix.save(out_path)
