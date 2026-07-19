@@ -299,12 +299,15 @@ struct PDFWorkspaceView: View {
                     .offset(x: pdfCanvasOffset(for: stageProxy.size))
                     #endif
 
-                    historyControls
-                        .padding(.leading, 12)
-                        .padding(.top, 12)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .offset(x: historyControlsOffset(for: stageProxy.size.width))
-                        .zIndex(0.5)
+                    if isPDFWritingMode {
+                        historyControls
+                            .padding(.leading, 12)
+                            .padding(.top, 12)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .offset(x: historyControlsOffset(for: stageProxy.size.width))
+                            .transition(.opacity)
+                            .zIndex(0.5)
+                    }
 
                     if isPageBrowserPresented, usesOverlayPageBrowser {
                         Color.black.opacity(0.14)
@@ -519,6 +522,18 @@ struct PDFWorkspaceView: View {
         #if os(iOS)
         HStack(spacing: compact ? 0 : 8) {
             Button {
+                isWritingMode = true
+                markupTool = .lasso
+                isImportingPDFPages = true
+            } label: {
+                Image(systemName: "doc.badge.plus")
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .disabled(isExportingPDF)
+            .accessibilityLabel("Insert PDF pages after current page")
+
+            Button {
                 exportPageCount = PDFDocument(url: rawFile.url)?.pageCount ?? 0
                 isExportScopePresented = true
             } label: {
@@ -536,18 +551,6 @@ struct PDFWorkspaceView: View {
                 )
                 .presentationCompactAdaptation(.popover)
             }
-
-            Button {
-                isWritingMode = true
-                markupTool = .lasso
-                isImportingPDFPages = true
-            } label: {
-                Image(systemName: "doc.badge.plus")
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
-            .disabled(isExportingPDF)
-            .accessibilityLabel("Insert PDF pages after current page")
         }
         #elseif os(macOS)
         EmptyView()
@@ -586,6 +589,14 @@ struct PDFWorkspaceView: View {
                 .stroke(.quaternary, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.10), radius: 4, y: 1)
+    }
+
+    private var isPDFWritingMode: Bool {
+        #if os(iOS)
+        isWritingMode
+        #elseif os(macOS)
+        isMacWritingMode
+        #endif
     }
 
     private func pageBrowserPanel(width: CGFloat) -> some View {

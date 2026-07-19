@@ -235,72 +235,87 @@ struct RootView: View {
     }
 
     private var iOSTopBar: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Button {
-                    openSidebar()
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .frame(width: 34, height: 34)
-                .contentShape(Rectangle())
+        GeometryReader { proxy in
+            let compact = proxy.size.width < 600
+            let horizontalPadding: CGFloat = compact ? 8 : 16
+            let leadingLaneWidth: CGFloat = compact ? 112 : 150
+            let titleWidth = max(
+                64,
+                min(compact ? 160 : 360, proxy.size.width - 2 * (horizontalPadding + leadingLaneWidth))
+            )
 
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 5) {
-                        Text(activeSurfaceTitle)
-                            .font(.headline.weight(.semibold))
+            ZStack {
+                HStack(spacing: compact ? 4 : 8) {
+                    HStack(spacing: compact ? 4 : 8) {
+                        Button {
+                            openSidebar()
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
 
-                        Circle()
-                            .fill(store.isWorkspaceConnected ? .green : .orange)
-                            .frame(width: 7, height: 7)
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(spacing: 5) {
+                                Text(activeSurfaceTitle)
+                                    .font(.headline.weight(.semibold))
+
+                                Circle()
+                                    .fill(store.isWorkspaceConnected ? .green : .orange)
+                                    .frame(width: 7, height: 7)
+                            }
+
+                            if let activePDFStatus {
+                                Text(activePDFStatus)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
                     }
+                    .lineLimit(1)
+                    .frame(width: leadingLaneWidth, alignment: .leading)
 
-                    if let activePDFStatus {
-                        Text(activePDFStatus)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                    Spacer(minLength: 8)
+
+                    HStack(spacing: compact ? 0 : 8) {
+                        Button {
+                            store.selectedPDFFocus = nil
+                            showingGlobalSearch = true
+                        } label: {
+                            Image(systemName: "magnifyingglass")
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
+
+                        Button {
+                            showingSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .contentShape(Rectangle())
                     }
                 }
+
+                Text(activeDocumentTitle ?? "")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(width: titleWidth, alignment: .center)
+                    .accessibilityLabel(activeDocumentTitle.map { "Open file: \($0)" } ?? "No open file")
             }
-            .lineLimit(1)
-            .frame(maxWidth: 150, alignment: .leading)
-
-            Text(activeDocumentTitle ?? "")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .accessibilityLabel(activeDocumentTitle.map { "Open file: \($0)" } ?? "No open file")
-
-            HStack(spacing: 4) {
-                Button {
-                    store.selectedPDFFocus = nil
-                    showingGlobalSearch = true
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .frame(width: 34, height: 34)
-                .contentShape(Rectangle())
-
-                Button {
-                    showingSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .frame(width: 34, height: 34)
-                .contentShape(Rectangle())
-            }
+            .padding(.horizontal, horizontalPadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
+        .frame(height: 42)
         .background(.quaternary.opacity(0.14))
     }
 
